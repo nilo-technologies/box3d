@@ -323,7 +323,7 @@ _Static_assert( sizeof( void* ) != 8 || sizeof( b3ShapeDef ) == 112,
 				"b3ShapeDef changed: update b3RecW_SHAPEDEF and b3RecR_SHAPEDEF together" );
 _Static_assert( sizeof( void* ) != 8 || sizeof( b3ParallelJointDef ) == 128,
 				"b3ParallelJointDef changed: update b3RecW_PARALLELJOINTDEF and its reader together" );
-_Static_assert( sizeof( void* ) != 8 || sizeof( b3DistanceJointDef ) == 160,
+_Static_assert( sizeof( void* ) != 8 || sizeof( b3DistanceJointDef ) == 168,
 				"b3DistanceJointDef changed: update b3RecW_DISTANCEJOINTDEF and its reader together" );
 _Static_assert( sizeof( void* ) != 8 || sizeof( b3FilterJointDef ) == 112,
 				"b3FilterJointDef changed: update b3RecW_FILTERJOINTDEF and its reader together" );
@@ -339,6 +339,8 @@ _Static_assert( sizeof( void* ) != 8 || sizeof( b3WeldJointDef ) == 128,
 				"b3WeldJointDef changed: update b3RecW_WELDJOINTDEF and its reader together" );
 _Static_assert( sizeof( void* ) != 8 || sizeof( b3WheelJointDef ) == 184,
 				"b3WheelJointDef changed: update b3RecW_WHEELJOINTDEF and its reader together" );
+_Static_assert( sizeof( void* ) != 8 || sizeof( b3CylindricalJointDef ) == 208,
+				"b3CylindricalJointDef changed: update b3RecW_CYLINDRICALJOINTDEF and its reader together" );
 
 void b3RecW_EXPLOSIONDEF( b3RecBuffer* buf, b3ExplosionDef v )
 {
@@ -441,6 +443,8 @@ void b3RecW_DISTANCEJOINTDEF( b3RecBuffer* buf, b3DistanceJointDef v )
 	b3RecW_BOOL( buf, v.enableMotor );
 	b3RecW_F32( buf, v.maxMotorForce );
 	b3RecW_F32( buf, v.motorSpeed );
+	b3RecW_F32( buf, v.springStiffness );
+	b3RecW_F32( buf, v.springDamping );
 }
 
 void b3RecW_FILTERJOINTDEF( b3RecBuffer* buf, b3FilterJointDef v )
@@ -476,6 +480,32 @@ void b3RecW_PRISMATICJOINTDEF( b3RecBuffer* buf, b3PrismaticJointDef v )
 	b3RecW_BOOL( buf, v.enableMotor );
 	b3RecW_F32( buf, v.maxMotorForce );
 	b3RecW_F32( buf, v.motorSpeed );
+}
+
+void b3RecW_CYLINDRICALJOINTDEF( b3RecBuffer* buf, b3CylindricalJointDef v )
+{
+	b3RecW_JointBase( buf, &v.base );
+	b3RecW_VEC3( buf, v.localSlideAxisA );
+	b3RecW_BOOL( buf, v.enableSpring );
+	b3RecW_F32( buf, v.hertz );
+	b3RecW_F32( buf, v.dampingRatio );
+	b3RecW_F32( buf, v.targetTranslation );
+	b3RecW_BOOL( buf, v.enableLimit );
+	b3RecW_F32( buf, v.lowerTranslation );
+	b3RecW_F32( buf, v.upperTranslation );
+	b3RecW_BOOL( buf, v.enableMotor );
+	b3RecW_F32( buf, v.maxMotorForce );
+	b3RecW_F32( buf, v.motorSpeed );
+	b3RecW_BOOL( buf, v.enableAngularSpring );
+	b3RecW_F32( buf, v.angularHertz );
+	b3RecW_F32( buf, v.angularDampingRatio );
+	b3RecW_F32( buf, v.targetAngle );
+	b3RecW_BOOL( buf, v.enableAngularLimit );
+	b3RecW_F32( buf, v.lowerAngle );
+	b3RecW_F32( buf, v.upperAngle );
+	b3RecW_BOOL( buf, v.enableAngularMotor );
+	b3RecW_F32( buf, v.maxMotorTorque );
+	b3RecW_F32( buf, v.angularMotorSpeed );
 }
 
 void b3RecW_REVOLUTEJOINTDEF( b3RecBuffer* buf, b3RevoluteJointDef v )

@@ -529,8 +529,8 @@ static void b3SolveContinuous( b3World* world, int bodySimIndex, b3TaskContext* 
 			continue;
 		}
 
-		// No continuous collision for sensors
-		if ( fastShape->sensorIndex != B3_NULL_INDEX )
+		// No continuous collision for sensors or disabled shapes
+		if ( fastShape->sensorIndex != B3_NULL_INDEX || fastShape->enabled == false )
 		{
 			continue;
 		}
@@ -2112,7 +2112,10 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 							// Shape is fast. It's aabb will be enlarged in continuous collision.
 							// Update the move array here for determinism because bullets are processed
 							// below in non-deterministic order.
-							b3BufferMove( broadPhase, shape->proxyKey );
+							if ( shape->proxyKey != B3_NULL_INDEX )
+							{
+								b3BufferMove( broadPhase, shape->proxyKey );
+							}
 
 							shapeId = shape->nextShapeId;
 						}
@@ -2128,7 +2131,11 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 							// A fast body may have been flagged as enlarged despite having no shapes enlarged.
 							if ( shape->enlargedAABB )
 							{
-								b3BroadPhase_EnlargeProxy( broadPhase, shape->proxyKey, shape->fatAABB );
+								// Disabled shapes have no proxy
+								if ( shape->proxyKey != B3_NULL_INDEX )
+								{
+									b3BroadPhase_EnlargeProxy( broadPhase, shape->proxyKey, shape->fatAABB );
+								}
 								shape->enlargedAABB = false;
 							}
 
@@ -2199,6 +2206,13 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 
 				// clear flag
 				shape->enlargedAABB = false;
+
+				// Disabled shapes have no proxy
+				if ( shape->proxyKey == B3_NULL_INDEX )
+				{
+					shapeId = shape->nextShapeId;
+					continue;
+				}
 
 				int proxyKey = shape->proxyKey;
 				int proxyId = B3_PROXY_ID( proxyKey );

@@ -185,6 +185,7 @@ static b3Shape* b3CreateShapeInternal( b3World* world, b3Body* body, b3WorldTran
 	shape->enableHitEvents = def->enableHitEvents;
 	shape->enablePreSolveEvents = def->enablePreSolveEvents;
 	shape->proxyKey = B3_NULL_INDEX;
+	shape->enabled = true;
 	shape->localCentroid = b3GetShapeCentroid( shape );
 	shape->aabbMargin = b3ComputeShapeMargin( shape );
 	shape->aabb = (b3AABB){ b3Vec3_zero, b3Vec3_zero };
@@ -1133,6 +1134,95 @@ bool b3Shape_IsSensor( b3ShapeId shapeId )
 	b3World* world = b3GetWorld( shapeId.world0 );
 	b3Shape* shape = b3GetShape( world, shapeId );
 	return shape->sensorIndex != B3_NULL_INDEX;
+}
+
+void b3Shape_Disable( b3ShapeId shapeId )
+{
+	b3World* world = b3GetUnlockedWorld( shapeId.world0 );
+	if ( world == NULL )
+	{
+		return;
+	}
+
+	b3Shape* shape = b3GetShape( world, shapeId );
+	if ( shape->enabled == false )
+	{
+		return;
+	}
+
+	B3_REC( world, ShapeDisable, shapeId );
+
+	world->locked = true;
+
+	shape->enabled = false;
+
+	// Destroy the contacts of this shape and wake the bodies touching it so they don't float
+	b3Body* body = b3Array_Get( world->bodies, shape->bodyId );
+	int contactKey = body->headContactKey;
+	while ( contactKey != B3_NULL_INDEX )
+	{
+		int contactId = contactKey >> 1;
+		int edgeIndex = contactKey & 1;
+
+		b3Contact* contact = b3Array_Get( world->contacts, contactId );
+		contactKey = contact->edges[edgeIndex].nextKey;
+
+		if ( contact->shapeIdA == shape->id || contact->shapeIdB == shape->id )
+		{
+			bool wakeBodies = true;
+			b3DestroyContact( world, contact, wakeBodies );
+		}
+	}
+
+	// Leaving the broad-phase removes the shape from contacts, sensors and world queries.
+	// Sensor overlaps on this shape end on the next sensor update.
+	b3DestroyShapeProxy( shape, &world->broadPhase );
+
+	b3ValidateSolverSets( world );
+
+	world->locked = false;
+}
+
+void b3Shape_Enable( b3ShapeId shapeId )
+{
+	b3World* world = b3GetUnlockedWorld( shapeId.world0 );
+	if ( world == NULL )
+	{
+		return;
+	}
+
+	b3Shape* shape = b3GetShape( world, shapeId );
+	if ( shape->enabled )
+	{
+		return;
+	}
+
+	B3_REC( world, ShapeEnable, shapeId );
+
+	world->locked = true;
+
+	shape->enabled = true;
+
+	// A shape on a disabled body gets its proxy when the body is enabled
+	b3Body* body = b3Array_Get( world->bodies, shape->bodyId );
+	if ( body->setIndex != b3_disabledSet )
+	{
+		b3WorldTransform transform = b3GetBodyTransformQuick( world, body );
+		bool forcePairCreation = true;
+		b3CreateShapeProxy( shape, &world->broadPhase, body->type, transform, forcePairCreation );
+		b3WakeBody( world, body );
+	}
+
+	b3ValidateSolverSets( world );
+
+	world->locked = false;
+}
+
+bool b3Shape_IsEnabled( b3ShapeId shapeId )
+{
+	b3World* world = b3GetWorld( shapeId.world0 );
+	b3Shape* shape = b3GetShape( world, shapeId );
+	return shape->enabled;
 }
 
 // todo no tests

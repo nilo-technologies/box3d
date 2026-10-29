@@ -91,6 +91,8 @@ static const char* ReplayJointTypeName( b3JointType type )
 			return "weld";
 		case b3_wheelJoint:
 			return "wheel";
+		case b3_cylindricalJoint:
+			return "cylindrical";
 		default:
 			return "?";
 	}
@@ -1490,6 +1492,10 @@ public:
 				break;
 			case b3_prismaticJoint:
 				ImGui::Text( "translation %.3f", b3PrismaticJoint_GetTranslation( joint ) );
+				break;
+			case b3_cylindricalJoint:
+				ImGui::Text( "translation %.3f", b3CylindricalJoint_GetTranslation( joint ) );
+				ImGui::Text( "angle    %.1f deg", b3CylindricalJoint_GetAngle( joint ) * B3_RAD_TO_DEG );
 				break;
 			case b3_distanceJoint:
 				ImGui::Text( "length   %.3f", b3DistanceJoint_GetCurrentLength( joint ) );

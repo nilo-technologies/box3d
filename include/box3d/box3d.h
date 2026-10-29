@@ -838,6 +838,16 @@ B3_API b3WorldId b3Shape_GetWorld( b3ShapeId shapeId );
 /// Returns true if the shape is a sensor
 B3_API bool b3Shape_IsSensor( b3ShapeId shapeId );
 
+/// Disable a shape. A disabled shape leaves the broad-phase: it has no contacts, sensor overlaps or
+/// query hits until it is enabled again. Its mass still counts towards the body.
+B3_API void b3Shape_Disable( b3ShapeId shapeId );
+
+/// Enable a shape that was disabled with b3Shape_Disable.
+B3_API void b3Shape_Enable( b3ShapeId shapeId );
+
+/// Returns true if the shape is enabled
+B3_API bool b3Shape_IsEnabled( b3ShapeId shapeId );
+
 /// Set the user data for a shape
 B3_API void b3Shape_SetUserData( b3ShapeId shapeId, void* userData );
 
@@ -1160,6 +1170,18 @@ B3_API float b3DistanceJoint_GetSpringHertz( b3JointId jointId );
 /// Get the spring damping ratio
 B3_API float b3DistanceJoint_GetSpringDampingRatio( b3JointId jointId );
 
+/// Set the spring stiffness (force per unit length) and damping (force per unit speed). When either
+/// is positive they override the spring hertz and damping ratio, so the spring force is exactly
+/// -stiffness * (length - restLength) - damping * lengthSpeed regardless of the attached masses.
+/// Pass zero for both to go back to hertz and damping ratio.
+B3_API void b3DistanceJoint_SetSpringStiffness( b3JointId jointId, float stiffness, float damping );
+
+/// Get the spring stiffness, see b3DistanceJoint_SetSpringStiffness
+B3_API float b3DistanceJoint_GetSpringStiffness( b3JointId jointId );
+
+/// Get the spring damping, see b3DistanceJoint_SetSpringStiffness
+B3_API float b3DistanceJoint_GetSpringDamping( b3JointId jointId );
+
 /// Enable joint limit. The limit only works if the joint spring is enabled. Otherwise the joint is rigid
 /// and the limit has no effect.
 B3_API void b3DistanceJoint_EnableLimit( b3JointId jointId, bool enableLimit );
@@ -1377,6 +1399,154 @@ B3_API float b3PrismaticJoint_GetTranslation( b3JointId jointId );
 B3_API float b3PrismaticJoint_GetSpeed( b3JointId jointId );
 
 /**@}*/ // prismatic_joint
+
+/**
+ * @defgroup cylindrical_joint Cylindrical Joint
+ * @brief A cylindrical joint allows translation along and rotation about a single shared axis.
+ *
+ * The axis is the x-axis of local frame A. The x-axis of local frame B stays coaxial with it.
+ * The joint has a linear spring, limit and motor along the axis and an angular spring, limit and
+ * motor about the axis.
+ * @{
+ */
+
+/// Create a cylindrical joint.
+/// @see b3CylindricalJointDef for details
+B3_API b3JointId b3CreateCylindricalJoint( b3WorldId worldId, const b3CylindricalJointDef* def );
+
+/// Enable/disable the linear spring.
+B3_API void b3CylindricalJoint_EnableSpring( b3JointId jointId, bool enableSpring );
+
+/// Is the linear spring enabled?
+B3_API bool b3CylindricalJoint_IsSpringEnabled( b3JointId jointId );
+
+/// Set the linear spring stiffness in Hertz.
+B3_API void b3CylindricalJoint_SetSpringHertz( b3JointId jointId, float hertz );
+
+/// Get the linear spring stiffness in Hertz.
+B3_API float b3CylindricalJoint_GetSpringHertz( b3JointId jointId );
+
+/// Set the linear spring damping ratio (non-dimensional).
+B3_API void b3CylindricalJoint_SetSpringDampingRatio( b3JointId jointId, float dampingRatio );
+
+/// Get the linear spring damping ratio (non-dimensional).
+B3_API float b3CylindricalJoint_GetSpringDampingRatio( b3JointId jointId );
+
+/// Set the linear spring target translation, usually in meters.
+B3_API void b3CylindricalJoint_SetTargetTranslation( b3JointId jointId, float targetTranslation );
+
+/// Get the linear spring target translation, usually in meters.
+B3_API float b3CylindricalJoint_GetTargetTranslation( b3JointId jointId );
+
+/// Enable/disable the translation limit.
+B3_API void b3CylindricalJoint_EnableLimit( b3JointId jointId, bool enableLimit );
+
+/// Is the translation limit enabled?
+B3_API bool b3CylindricalJoint_IsLimitEnabled( b3JointId jointId );
+
+/// Get the lower translation limit.
+B3_API float b3CylindricalJoint_GetLowerLimit( b3JointId jointId );
+
+/// Get the upper translation limit.
+B3_API float b3CylindricalJoint_GetUpperLimit( b3JointId jointId );
+
+/// Set the translation limits.
+B3_API void b3CylindricalJoint_SetLimits( b3JointId jointId, float lower, float upper );
+
+/// Enable/disable the linear motor.
+B3_API void b3CylindricalJoint_EnableMotor( b3JointId jointId, bool enableMotor );
+
+/// Is the linear motor enabled?
+B3_API bool b3CylindricalJoint_IsMotorEnabled( b3JointId jointId );
+
+/// Set the linear motor speed, usually in meters per second.
+B3_API void b3CylindricalJoint_SetMotorSpeed( b3JointId jointId, float motorSpeed );
+
+/// Get the linear motor speed, usually in meters per second.
+B3_API float b3CylindricalJoint_GetMotorSpeed( b3JointId jointId );
+
+/// Set the maximum linear motor force, usually in newtons.
+B3_API void b3CylindricalJoint_SetMaxMotorForce( b3JointId jointId, float force );
+
+/// Get the maximum linear motor force, usually in newtons.
+B3_API float b3CylindricalJoint_GetMaxMotorForce( b3JointId jointId );
+
+/// Get the current linear motor force, usually in newtons.
+B3_API float b3CylindricalJoint_GetMotorForce( b3JointId jointId );
+
+/// Enable/disable the angular spring.
+B3_API void b3CylindricalJoint_EnableAngularSpring( b3JointId jointId, bool enableSpring );
+
+/// Is the angular spring enabled?
+B3_API bool b3CylindricalJoint_IsAngularSpringEnabled( b3JointId jointId );
+
+/// Set the angular spring stiffness in Hertz.
+B3_API void b3CylindricalJoint_SetAngularSpringHertz( b3JointId jointId, float hertz );
+
+/// Get the angular spring stiffness in Hertz.
+B3_API float b3CylindricalJoint_GetAngularSpringHertz( b3JointId jointId );
+
+/// Set the angular spring damping ratio (non-dimensional).
+B3_API void b3CylindricalJoint_SetAngularSpringDampingRatio( b3JointId jointId, float dampingRatio );
+
+/// Get the angular spring damping ratio (non-dimensional).
+B3_API float b3CylindricalJoint_GetAngularSpringDampingRatio( b3JointId jointId );
+
+/// Set the angular spring target angle in radians.
+B3_API void b3CylindricalJoint_SetTargetAngle( b3JointId jointId, float targetAngle );
+
+/// Get the angular spring target angle in radians.
+B3_API float b3CylindricalJoint_GetTargetAngle( b3JointId jointId );
+
+/// Enable/disable the angle limit.
+B3_API void b3CylindricalJoint_EnableAngularLimit( b3JointId jointId, bool enableLimit );
+
+/// Is the angle limit enabled?
+B3_API bool b3CylindricalJoint_IsAngularLimitEnabled( b3JointId jointId );
+
+/// Get the lower angle limit in radians.
+B3_API float b3CylindricalJoint_GetLowerAngle( b3JointId jointId );
+
+/// Get the upper angle limit in radians.
+B3_API float b3CylindricalJoint_GetUpperAngle( b3JointId jointId );
+
+/// Set the angle limits in radians, clamped to [-0.99*pi, 0.99*pi].
+B3_API void b3CylindricalJoint_SetAngularLimits( b3JointId jointId, float lower, float upper );
+
+/// Enable/disable the angular motor.
+B3_API void b3CylindricalJoint_EnableAngularMotor( b3JointId jointId, bool enableMotor );
+
+/// Is the angular motor enabled?
+B3_API bool b3CylindricalJoint_IsAngularMotorEnabled( b3JointId jointId );
+
+/// Set the angular motor speed in radians per second.
+B3_API void b3CylindricalJoint_SetAngularMotorSpeed( b3JointId jointId, float motorSpeed );
+
+/// Get the angular motor speed in radians per second.
+B3_API float b3CylindricalJoint_GetAngularMotorSpeed( b3JointId jointId );
+
+/// Set the maximum angular motor torque, usually in newton-meters.
+B3_API void b3CylindricalJoint_SetMaxMotorTorque( b3JointId jointId, float torque );
+
+/// Get the maximum angular motor torque, usually in newton-meters.
+B3_API float b3CylindricalJoint_GetMaxMotorTorque( b3JointId jointId );
+
+/// Get the current angular motor torque, usually in newton-meters.
+B3_API float b3CylindricalJoint_GetMotorTorque( b3JointId jointId );
+
+/// Get the current joint translation along the axis, usually in meters.
+B3_API float b3CylindricalJoint_GetTranslation( b3JointId jointId );
+
+/// Get the current joint translation speed along the axis, usually in meters per second.
+B3_API float b3CylindricalJoint_GetSpeed( b3JointId jointId );
+
+/// Get the current joint angle about the axis in radians, in [-pi, pi].
+B3_API float b3CylindricalJoint_GetAngle( b3JointId jointId );
+
+/// Get the current joint angular speed about the axis in radians per second.
+B3_API float b3CylindricalJoint_GetAngularSpeed( b3JointId jointId );
+
+/**@}*/ // cylindrical_joint
 
 /**
  * @defgroup revolute_joint Revolute Joint

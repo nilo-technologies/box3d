@@ -44,6 +44,8 @@ typedef struct b3Shape
 	bool enableHitEvents;
 	bool enablePreSolveEvents;
 	bool enlargedAABB;
+	// false after b3Shape_Disable: the shape has no broad-phase proxy, contacts, sensor overlaps or query hits
+	bool enabled;
 
 	union
 	{

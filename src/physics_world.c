@@ -3671,7 +3671,7 @@ void b3ValidateSolverSets( b3World* world )
 						B3_ASSERT( shape->id == shapeId );
 						B3_ASSERT( shape->prevShapeId == prevShapeId );
 
-						if ( setIndex == b3_disabledSet )
+						if ( setIndex == b3_disabledSet || shape->enabled == false )
 						{
 							B3_ASSERT( shape->proxyKey == B3_NULL_INDEX );
 						}

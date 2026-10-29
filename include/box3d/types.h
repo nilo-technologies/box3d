@@ -594,6 +594,7 @@ typedef enum b3JointType
 	b3_sphericalJoint,
 	b3_weldJoint,
 	b3_wheelJoint,
+	b3_cylindricalJoint,
 } b3JointType;
 
 /// Base joint definition used by all joint types. The local frames are measured from the
@@ -667,6 +668,15 @@ typedef struct b3DistanceJointDef
 
 	/// The spring linear damping ratio, non-dimensional
 	float dampingRatio;
+
+	/// The spring stiffness in force per unit length (usually N/m). When this or springDamping is
+	/// positive, it overrides hertz and dampingRatio so the spring applies exactly
+	/// force = -springStiffness * (length - restLength) - springDamping * lengthSpeed,
+	/// independent of the attached masses.
+	float springStiffness;
+
+	/// The spring damping in force per unit speed (usually N*s/m). See springStiffness.
+	float springDamping;
 
 	/// Enable/disable the joint limit
 	bool enableLimit;
@@ -812,6 +822,85 @@ typedef struct b3PrismaticJointDef
 /// Use this to initialize your joint definition
 /// @ingroup prismatic_joint
 B3_API b3PrismaticJointDef b3DefaultPrismaticJointDef( void );
+
+/// Cylindrical joint definition. Body B may rotate about the x-axis in local frame A and slide along
+/// localSlideAxisA (also expressed in local frame A, the x-axis by default). The x-axis of local frame B
+/// stays parallel to the x-axis of local frame A. The joint translation is zero when the local frame
+/// origins coincide along the slide axis, and the joint angle is zero when the frames are aligned.
+/// @ingroup cylindrical_joint
+typedef struct b3CylindricalJointDef
+{
+	/// Base joint definition
+	b3JointDef base;
+
+	/// The slide direction in local frame A. Normalized when the joint is created. Defaults to the
+	/// x-axis, which makes the joint coaxial (translation along the rotation axis).
+	b3Vec3 localSlideAxisA;
+
+	/// Enable a linear spring along the joint axis
+	bool enableSpring;
+
+	/// The linear spring stiffness Hertz, cycles per second
+	float hertz;
+
+	/// The linear spring damping ratio, non-dimensional
+	float dampingRatio;
+
+	/// The target translation for the linear spring, usually in meters
+	float targetTranslation;
+
+	/// Enable/disable the translation limit
+	bool enableLimit;
+
+	/// The lower translation limit
+	float lowerTranslation;
+
+	/// The upper translation limit
+	float upperTranslation;
+
+	/// Enable/disable the linear motor
+	bool enableMotor;
+
+	/// The maximum linear motor force, typically in newtons
+	float maxMotorForce;
+
+	/// The desired linear motor speed, typically in meters per second
+	float motorSpeed;
+
+	/// Enable a rotational spring about the joint axis
+	bool enableAngularSpring;
+
+	/// The rotational spring stiffness Hertz, cycles per second
+	float angularHertz;
+
+	/// The rotational spring damping ratio, non-dimensional
+	float angularDampingRatio;
+
+	/// The target angle for the rotational spring in radians
+	float targetAngle;
+
+	/// Enable/disable the angle limit
+	bool enableAngularLimit;
+
+	/// The lower angle limit in radians. Minimum of -0.99*pi radians.
+	float lowerAngle;
+
+	/// The upper angle limit in radians. Maximum of 0.99*pi radians.
+	float upperAngle;
+
+	/// Enable/disable the angular motor
+	bool enableAngularMotor;
+
+	/// The maximum angular motor torque, typically in newton-meters
+	float maxMotorTorque;
+
+	/// The desired angular motor speed in radians per second
+	float angularMotorSpeed;
+} b3CylindricalJointDef;
+
+/// Use this to initialize your joint definition
+/// @ingroup cylindrical_joint
+B3_API b3CylindricalJointDef b3DefaultCylindricalJointDef( void );
 
 /// Revolute joint definition. A point on body B is fixed to a point on body A.
 /// Allows relative rotation about the z-axis.

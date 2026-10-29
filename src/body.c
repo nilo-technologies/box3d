@@ -605,7 +605,7 @@ b3BodyCastResult b3Body_CastRay( b3BodyId bodyId, b3Pos origin, b3Vec3 translati
 		b3Shape* shape = b3Array_Get( world->shapes, shapeId );
 		shapeId = shape->nextShapeId;
 
-		if ( b3ShouldQueryCollide( &shape->filter, &filter ) == false )
+		if ( shape->enabled == false || b3ShouldQueryCollide( &shape->filter, &filter ) == false )
 		{
 			continue;
 		}
@@ -671,7 +671,7 @@ b3BodyCastResult b3Body_CastShape( b3BodyId bodyId, b3Pos origin, const b3ShapeP
 		b3Shape* shape = b3Array_Get( world->shapes, shapeId );
 		shapeId = shape->nextShapeId;
 
-		if ( b3ShouldQueryCollide( &shape->filter, &filter ) == false )
+		if ( shape->enabled == false || b3ShouldQueryCollide( &shape->filter, &filter ) == false )
 		{
 			continue;
 		}
@@ -728,7 +728,7 @@ bool b3Body_OverlapShape( b3BodyId bodyId, b3Pos origin, const b3ShapeProxy* pro
 		b3Shape* shape = b3Array_Get( world->shapes, shapeId );
 		shapeId = shape->nextShapeId;
 
-		if ( b3ShouldQueryCollide( &shape->filter, &filter ) == false )
+		if ( shape->enabled == false || b3ShouldQueryCollide( &shape->filter, &filter ) == false )
 		{
 			continue;
 		}
@@ -768,7 +768,7 @@ int b3Body_CollideMover( b3BodyId bodyId, b3BodyPlaneResult* bodyPlanes, int pla
 		b3Shape* shape = b3Array_Get( world->shapes, shapeId );
 		shapeId = shape->nextShapeId;
 
-		if ( b3ShouldQueryCollide( &shape->filter, &filter ) == false )
+		if ( shape->enabled == false || b3ShouldQueryCollide( &shape->filter, &filter ) == false )
 		{
 			continue;
 		}
@@ -1680,8 +1680,11 @@ void b3Body_SetType( b3BodyId bodyId, b3BodyType type )
 
 		shapeId = shape->nextShapeId;
 		b3DestroyShapeProxy( shape, &world->broadPhase );
-		bool forcePairCreation = true;
-		b3CreateShapeProxy( shape, &world->broadPhase, type, transform, forcePairCreation );
+		if ( shape->enabled )
+		{
+			bool forcePairCreation = true;
+			b3CreateShapeProxy( shape, &world->broadPhase, type, transform, forcePairCreation );
+		}
 	}
 
 	// Relink all joints
@@ -2155,7 +2158,10 @@ void b3Body_Enable( b3BodyId bodyId )
 		b3Shape* shape = b3Array_Get( world->shapes, shapeId );
 		shapeId = shape->nextShapeId;
 
-		b3CreateShapeProxy( shape, &world->broadPhase, proxyType, transform, forcePairCreation );
+		if ( shape->enabled )
+		{
+			b3CreateShapeProxy( shape, &world->broadPhase, proxyType, transform, forcePairCreation );
+		}
 	}
 
 	if ( setId != b3_staticSet )

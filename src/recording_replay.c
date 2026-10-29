@@ -527,6 +527,8 @@ b3DistanceJointDef b3RecR_DISTANCEJOINTDEF( b3RecReader* rdr )
 	def.enableMotor = b3RecR_BOOL( rdr );
 	def.maxMotorForce = b3RecR_F32( rdr );
 	def.motorSpeed = b3RecR_F32( rdr );
+	def.springStiffness = b3RecR_F32( rdr );
+	def.springDamping = b3RecR_F32( rdr );
 	return def;
 }
 
@@ -568,6 +570,34 @@ b3PrismaticJointDef b3RecR_PRISMATICJOINTDEF( b3RecReader* rdr )
 	def.enableMotor = b3RecR_BOOL( rdr );
 	def.maxMotorForce = b3RecR_F32( rdr );
 	def.motorSpeed = b3RecR_F32( rdr );
+	return def;
+}
+
+b3CylindricalJointDef b3RecR_CYLINDRICALJOINTDEF( b3RecReader* rdr )
+{
+	b3CylindricalJointDef def = b3DefaultCylindricalJointDef();
+	b3RecR_JointBase( rdr, &def.base );
+	def.localSlideAxisA = b3RecR_VEC3( rdr );
+	def.enableSpring = b3RecR_BOOL( rdr );
+	def.hertz = b3RecR_F32( rdr );
+	def.dampingRatio = b3RecR_F32( rdr );
+	def.targetTranslation = b3RecR_F32( rdr );
+	def.enableLimit = b3RecR_BOOL( rdr );
+	def.lowerTranslation = b3RecR_F32( rdr );
+	def.upperTranslation = b3RecR_F32( rdr );
+	def.enableMotor = b3RecR_BOOL( rdr );
+	def.maxMotorForce = b3RecR_F32( rdr );
+	def.motorSpeed = b3RecR_F32( rdr );
+	def.enableAngularSpring = b3RecR_BOOL( rdr );
+	def.angularHertz = b3RecR_F32( rdr );
+	def.angularDampingRatio = b3RecR_F32( rdr );
+	def.targetAngle = b3RecR_F32( rdr );
+	def.enableAngularLimit = b3RecR_BOOL( rdr );
+	def.lowerAngle = b3RecR_F32( rdr );
+	def.upperAngle = b3RecR_F32( rdr );
+	def.enableAngularMotor = b3RecR_BOOL( rdr );
+	def.maxMotorTorque = b3RecR_F32( rdr );
+	def.angularMotorSpeed = b3RecR_F32( rdr );
 	return def;
 }
 
@@ -1136,6 +1166,16 @@ static void b3RecDispatch_ShapeApplyWind( const b3RecArgs_ShapeApplyWind* a, b3R
 	b3Shape_ApplyWind( b3RecMakeShapeId( rdr, a->shape ), a->wind, a->drag, a->lift, a->maxSpeed, a->wake );
 }
 
+static void b3RecDispatch_ShapeDisable( const b3RecArgs_ShapeDisable* a, b3RecReader* rdr )
+{
+	b3Shape_Disable( b3RecMakeShapeId( rdr, a->shape ) );
+}
+
+static void b3RecDispatch_ShapeEnable( const b3RecArgs_ShapeEnable* a, b3RecReader* rdr )
+{
+	b3Shape_Enable( b3RecMakeShapeId( rdr, a->shape ) );
+}
+
 // Joint creates: remap body ids in the def before calling the API.
 
 static void b3RecDispatch_CreateParallelJoint( const b3RecArgs_CreateParallelJoint* a, b3RecReader* rdr )
@@ -1181,6 +1221,15 @@ static void b3RecDispatch_CreatePrismaticJoint( const b3RecArgs_CreatePrismaticJ
 	def.base.bodyIdA = b3RecMakeBodyId( rdr, def.base.bodyIdA );
 	def.base.bodyIdB = b3RecMakeBodyId( rdr, def.base.bodyIdB );
 	b3RecCheckJointId( rdr, b3CreatePrismaticJoint( rdr->replayWorldId, &def ), recId );
+}
+
+static void b3RecDispatch_CreateCylindricalJoint( const b3RecArgs_CreateCylindricalJoint* a, b3RecReader* rdr )
+{
+	b3JointId recId = b3RecR_JOINTID( rdr );
+	b3CylindricalJointDef def = a->def;
+	def.base.bodyIdA = b3RecMakeBodyId( rdr, def.base.bodyIdA );
+	def.base.bodyIdB = b3RecMakeBodyId( rdr, def.base.bodyIdB );
+	b3RecCheckJointId( rdr, b3CreateCylindricalJoint( rdr->replayWorldId, &def ), recId );
 }
 
 static void b3RecDispatch_CreateRevoluteJoint( const b3RecArgs_CreateRevoluteJoint* a, b3RecReader* rdr )
@@ -1423,6 +1472,110 @@ static void b3RecDispatch_PrismaticJointSetMotorSpeed( const b3RecArgs_Prismatic
 static void b3RecDispatch_PrismaticJointSetMaxMotorForce( const b3RecArgs_PrismaticJointSetMaxMotorForce* a, b3RecReader* rdr )
 {
 	b3PrismaticJoint_SetMaxMotorForce( b3RecMakeJointId( rdr, a->joint ), a->force );
+}
+
+static void b3RecDispatch_CylindricalJointEnableSpring( const b3RecArgs_CylindricalJointEnableSpring* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_EnableSpring( b3RecMakeJointId( rdr, a->joint ), a->enableSpring );
+}
+
+static void b3RecDispatch_CylindricalJointSetSpringHertz( const b3RecArgs_CylindricalJointSetSpringHertz* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetSpringHertz( b3RecMakeJointId( rdr, a->joint ), a->hertz );
+}
+
+static void b3RecDispatch_CylindricalJointSetSpringDampingRatio( const b3RecArgs_CylindricalJointSetSpringDampingRatio* a,
+																 b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetSpringDampingRatio( b3RecMakeJointId( rdr, a->joint ), a->dampingRatio );
+}
+
+static void b3RecDispatch_CylindricalJointSetTargetTranslation( const b3RecArgs_CylindricalJointSetTargetTranslation* a,
+																b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetTargetTranslation( b3RecMakeJointId( rdr, a->joint ), a->translation );
+}
+
+static void b3RecDispatch_CylindricalJointEnableLimit( const b3RecArgs_CylindricalJointEnableLimit* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_EnableLimit( b3RecMakeJointId( rdr, a->joint ), a->enableLimit );
+}
+
+static void b3RecDispatch_CylindricalJointSetLimits( const b3RecArgs_CylindricalJointSetLimits* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetLimits( b3RecMakeJointId( rdr, a->joint ), a->lower, a->upper );
+}
+
+static void b3RecDispatch_CylindricalJointEnableMotor( const b3RecArgs_CylindricalJointEnableMotor* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_EnableMotor( b3RecMakeJointId( rdr, a->joint ), a->enableMotor );
+}
+
+static void b3RecDispatch_CylindricalJointSetMotorSpeed( const b3RecArgs_CylindricalJointSetMotorSpeed* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetMotorSpeed( b3RecMakeJointId( rdr, a->joint ), a->motorSpeed );
+}
+
+static void b3RecDispatch_CylindricalJointSetMaxMotorForce( const b3RecArgs_CylindricalJointSetMaxMotorForce* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetMaxMotorForce( b3RecMakeJointId( rdr, a->joint ), a->force );
+}
+
+static void b3RecDispatch_CylindricalJointEnableAngularSpring( const b3RecArgs_CylindricalJointEnableAngularSpring* a,
+															   b3RecReader* rdr )
+{
+	b3CylindricalJoint_EnableAngularSpring( b3RecMakeJointId( rdr, a->joint ), a->enableSpring );
+}
+
+static void b3RecDispatch_CylindricalJointSetAngularSpringHertz( const b3RecArgs_CylindricalJointSetAngularSpringHertz* a,
+																 b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetAngularSpringHertz( b3RecMakeJointId( rdr, a->joint ), a->hertz );
+}
+
+static void b3RecDispatch_CylindricalJointSetAngularSpringDampingRatio(
+	const b3RecArgs_CylindricalJointSetAngularSpringDampingRatio* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetAngularSpringDampingRatio( b3RecMakeJointId( rdr, a->joint ), a->dampingRatio );
+}
+
+static void b3RecDispatch_CylindricalJointSetTargetAngle( const b3RecArgs_CylindricalJointSetTargetAngle* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetTargetAngle( b3RecMakeJointId( rdr, a->joint ), a->angle );
+}
+
+static void b3RecDispatch_CylindricalJointEnableAngularLimit( const b3RecArgs_CylindricalJointEnableAngularLimit* a,
+															  b3RecReader* rdr )
+{
+	b3CylindricalJoint_EnableAngularLimit( b3RecMakeJointId( rdr, a->joint ), a->enableLimit );
+}
+
+static void b3RecDispatch_CylindricalJointSetAngularLimits( const b3RecArgs_CylindricalJointSetAngularLimits* a, b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetAngularLimits( b3RecMakeJointId( rdr, a->joint ), a->lower, a->upper );
+}
+
+static void b3RecDispatch_CylindricalJointEnableAngularMotor( const b3RecArgs_CylindricalJointEnableAngularMotor* a,
+															  b3RecReader* rdr )
+{
+	b3CylindricalJoint_EnableAngularMotor( b3RecMakeJointId( rdr, a->joint ), a->enableMotor );
+}
+
+static void b3RecDispatch_CylindricalJointSetAngularMotorSpeed( const b3RecArgs_CylindricalJointSetAngularMotorSpeed* a,
+																b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetAngularMotorSpeed( b3RecMakeJointId( rdr, a->joint ), a->motorSpeed );
+}
+
+static void b3RecDispatch_CylindricalJointSetMaxMotorTorque( const b3RecArgs_CylindricalJointSetMaxMotorTorque* a,
+															 b3RecReader* rdr )
+{
+	b3CylindricalJoint_SetMaxMotorTorque( b3RecMakeJointId( rdr, a->joint ), a->torque );
+}
+
+static void b3RecDispatch_DistanceJointSetSpringStiffness( const b3RecArgs_DistanceJointSetSpringStiffness* a, b3RecReader* rdr )
+{
+	b3DistanceJoint_SetSpringStiffness( b3RecMakeJointId( rdr, a->joint ), a->stiffness, a->damping );
 }
 
 static void b3RecDispatch_RevoluteJointEnableSpring( const b3RecArgs_RevoluteJointEnableSpring* a, b3RecReader* rdr )

@@ -347,6 +347,91 @@ static int TestPrismaticJoint( void )
 	return FinishJoint( jointId, f.worldId );
 }
 
+static int TestCylindricalJoint( void )
+{
+	JointFixture f = CreateJointFixture();
+
+	b3CylindricalJointDef def = b3DefaultCylindricalJointDef();
+	ENSURE( def.localSlideAxisA.x == 1.0f && def.localSlideAxisA.y == 0.0f && def.localSlideAxisA.z == 0.0f );
+	SetCommonFrames( &def.base, &f );
+	b3JointId jointId = b3CreateCylindricalJoint( f.worldId, &def );
+
+	if ( ExerciseJointBase( jointId, f.worldId, f.groundId, f.bodyId, b3_cylindricalJoint ) != 0 )
+	{
+		return 1;
+	}
+
+	b3CylindricalJoint_EnableSpring( jointId, true );
+	ENSURE( b3CylindricalJoint_IsSpringEnabled( jointId ) == true );
+	b3CylindricalJoint_SetSpringHertz( jointId, 5.0f );
+	ENSURE( b3CylindricalJoint_GetSpringHertz( jointId ) == 5.0f );
+	b3CylindricalJoint_SetSpringDampingRatio( jointId, 0.5f );
+	ENSURE( b3CylindricalJoint_GetSpringDampingRatio( jointId ) == 0.5f );
+	b3CylindricalJoint_SetTargetTranslation( jointId, 1.0f );
+	ENSURE( b3CylindricalJoint_GetTargetTranslation( jointId ) == 1.0f );
+	b3CylindricalJoint_EnableSpring( jointId, false );
+
+	b3CylindricalJoint_EnableLimit( jointId, true );
+	ENSURE( b3CylindricalJoint_IsLimitEnabled( jointId ) == true );
+	b3CylindricalJoint_SetLimits( jointId, 0.5f, -0.5f );
+	ENSURE( b3CylindricalJoint_GetLowerLimit( jointId ) == -0.5f );
+	ENSURE( b3CylindricalJoint_GetUpperLimit( jointId ) == 0.5f );
+
+	b3CylindricalJoint_EnableMotor( jointId, true );
+	ENSURE( b3CylindricalJoint_IsMotorEnabled( jointId ) == true );
+	b3CylindricalJoint_SetMotorSpeed( jointId, 2.0f );
+	ENSURE( b3CylindricalJoint_GetMotorSpeed( jointId ) == 2.0f );
+	b3CylindricalJoint_SetMaxMotorForce( jointId, 50.0f );
+	ENSURE( b3CylindricalJoint_GetMaxMotorForce( jointId ) == 50.0f );
+
+	b3CylindricalJoint_EnableAngularSpring( jointId, true );
+	ENSURE( b3CylindricalJoint_IsAngularSpringEnabled( jointId ) == true );
+	b3CylindricalJoint_SetAngularSpringHertz( jointId, 2.0f );
+	ENSURE( b3CylindricalJoint_GetAngularSpringHertz( jointId ) == 2.0f );
+	b3CylindricalJoint_SetAngularSpringDampingRatio( jointId, 0.7f );
+	ENSURE( b3CylindricalJoint_GetAngularSpringDampingRatio( jointId ) == 0.7f );
+	b3CylindricalJoint_SetTargetAngle( jointId, 0.25f );
+	ENSURE( b3CylindricalJoint_GetTargetAngle( jointId ) == 0.25f );
+	b3CylindricalJoint_EnableAngularSpring( jointId, false );
+
+	b3CylindricalJoint_EnableAngularLimit( jointId, true );
+	ENSURE( b3CylindricalJoint_IsAngularLimitEnabled( jointId ) == true );
+	b3CylindricalJoint_SetAngularLimits( jointId, -0.5f, 0.5f );
+	ENSURE( b3CylindricalJoint_GetLowerAngle( jointId ) == -0.5f );
+	ENSURE( b3CylindricalJoint_GetUpperAngle( jointId ) == 0.5f );
+
+	b3CylindricalJoint_EnableAngularMotor( jointId, true );
+	ENSURE( b3CylindricalJoint_IsAngularMotorEnabled( jointId ) == true );
+	b3CylindricalJoint_SetAngularMotorSpeed( jointId, 3.0f );
+	ENSURE( b3CylindricalJoint_GetAngularMotorSpeed( jointId ) == 3.0f );
+	b3CylindricalJoint_SetMaxMotorTorque( jointId, 5.0f );
+	ENSURE( b3CylindricalJoint_GetMaxMotorTorque( jointId ) == 5.0f );
+
+	// Restore coincident frames, then drive both motors into their limits
+	b3Joint_SetLocalFrameA( jointId, (b3Transform){ { 0.0f, 4.0f, 0.0f }, b3Quat_identity } );
+	b3Joint_SetLocalFrameB( jointId, b3Transform_identity );
+	for ( int i = 0; i < 120; ++i )
+	{
+		b3World_Step( f.worldId, 1.0f / 60.0f, 4 );
+	}
+
+	float translation = b3CylindricalJoint_GetTranslation( jointId );
+	float angle = b3CylindricalJoint_GetAngle( jointId );
+	ENSURE_SMALL( translation - 0.5f, 0.02f );
+	ENSURE_SMALL( angle - 0.5f, 0.02f );
+	ENSURE_SMALL( b3CylindricalJoint_GetSpeed( jointId ), 0.05f );
+	ENSURE_SMALL( b3CylindricalJoint_GetAngularSpeed( jointId ), 0.05f );
+	ENSURE( b3CylindricalJoint_GetMotorForce( jointId ) > 0.0f );
+	ENSURE( b3CylindricalJoint_GetMotorTorque( jointId ) > 0.0f );
+
+	// The body stays on the axis
+	b3Pos p = b3Body_GetPosition( f.bodyId );
+	ENSURE_SMALL( p.y - 4.0f, 0.01f );
+	ENSURE_SMALL( p.z, 0.01f );
+
+	return FinishJoint( jointId, f.worldId );
+}
+
 static int TestRevoluteJoint( void )
 {
 	JointFixture f = CreateJointFixture();
@@ -572,6 +657,7 @@ int JointTest( void )
 	RUN_SUBTEST( TestFilterJoint );
 	RUN_SUBTEST( TestMotorJoint );
 	RUN_SUBTEST( TestPrismaticJoint );
+	RUN_SUBTEST( TestCylindricalJoint );
 	RUN_SUBTEST( TestRevoluteJoint );
 	RUN_SUBTEST( TestSphericalJoint );
 	RUN_SUBTEST( TestWeldJoint );
