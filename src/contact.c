@@ -5,7 +5,6 @@
 
 #include "algorithm.h"
 #include "body.h"
-#include "compound.h"
 #include "island.h"
 #include "manifold.h"
 #include "physics_world.h"
@@ -210,12 +209,8 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
 	contact->shapeIdA = shapeIdA;
 	contact->shapeIdB = shapeIdB;
 	contact->childIndex = childIndex;
-
-	// Both bodies must enable recycling
-	if ( ( bodyA->flags & b3_bodyEnableContactRecycling ) != 0 && ( bodyB->flags & b3_bodyEnableContactRecycling ) != 0 )
-	{
-		contact->flags |= b3_contactRecycleFlag;
-	}
+	contact->encodedBodySimA = b3EncodeBodySimIndex( bodyA );
+	contact->encodedBodySimB = b3EncodeBodySimIndex( bodyB );
 
 	if ( shapeA->type == b3_meshShape || shapeA->type == b3_heightShape )
 	{
@@ -243,9 +238,21 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
 
 	B3_ASSERT( shapeA->sensorIndex == B3_NULL_INDEX && shapeB->sensorIndex == B3_NULL_INDEX );
 
-	if ( shapeA->enableContactEvents || shapeB->enableContactEvents )
+	if ( ( shapeA->flags & b3_enableContactEvents ) || ( shapeB->flags & b3_enableContactEvents ) )
 	{
 		contact->flags |= b3_contactEnableContactEvents;
+	}
+
+	if ( ( shapeA->flags & b3_enableSpeculative ) && ( shapeB->flags & b3_enableSpeculative ) )
+	{
+		contact->flags |= b3_enableSpeculativePoints;
+	}
+
+	// Disabling speculative collision also disables recycling.
+	if ( ( bodyA->flags & b3_enableContactRecycling ) != 0 && ( bodyB->flags & b3_enableContactRecycling ) != 0 &&
+		 ( contact->flags & b3_enableSpeculativePoints ) != 0 )
+	{
+		contact->flags |= b3_contactRecycleFlag;
 	}
 
 	// Connect to body A
@@ -317,7 +324,7 @@ void b3CreateContact( b3World* world, b3Shape* shapeA, b3Shape* shapeB, int chil
 		b3MaxFloat( b3GetShapeMaterials( shapeA )[0].rollingResistance, b3GetShapeMaterials( shapeB )[0].rollingResistance ) *
 		maxRadius;
 
-	if ( shapeA->enablePreSolveEvents || shapeB->enablePreSolveEvents )
+	if ( ( shapeA->flags & b3_enablePreSolveEvents ) || ( shapeB->flags & b3_enablePreSolveEvents ) )
 	{
 		contact->flags |= b3_simEnablePreSolveEvents;
 	}
@@ -480,7 +487,7 @@ static bool b3ComputeConvexManifold( b3World* world, int workerIndex, b3Contact*
 
 	b3ContactCache* cache = &contact->convexContact.cache;
 
-	int pointCapacity = 32;
+	int pointCapacity = B3_MAX_MANIFOLD_POINTS;
 	b3LocalManifoldPoint* pointBuffer = (b3LocalManifoldPoint*)b3Bump( &arena, pointCapacity * sizeof( b3LocalManifoldPoint ) );
 
 	b3LocalManifold geomManifold = { 0 };
@@ -522,7 +529,8 @@ static bool b3ComputeConvexManifold( b3World* world, int workerIndex, b3Contact*
 		else
 		{
 			B3_ASSERT( typeB == b3_hullShape );
-			b3CollideHulls( &geomManifold, pointCapacity, shapeA->hull, shapeB->hull, transformBtoA, &cache->satCache );
+			b3CollideHullsAtWidth( &geomManifold, pointCapacity, shapeA->hull, shapeB->hull, transformBtoA, &cache->satCache,
+								   world->simdWidth );
 			world->taskContexts.data[workerIndex].satCallCount += 1;
 			world->taskContexts.data[workerIndex].satCacheHitCount += cache->satCache.hit;
 		}
@@ -555,6 +563,7 @@ static bool b3ComputeConvexManifold( b3World* world, int workerIndex, b3Contact*
 	}
 
 	b3Manifold* manifold = contact->manifolds;
+	B3_ASSERT( 0 < geomManifold.pointCount && geomManifold.pointCount <= B3_MAX_MANIFOLD_POINTS );
 	manifold->pointCount = geomManifold.pointCount;
 
 	b3Matrix3 matrixA = b3MakeMatrixFromQuat( xfA.q );
@@ -703,11 +712,14 @@ static bool b3UpdateConvexContact( b3World* world, int workerIndex, b3Contact* c
 			b3FreeManifolds( world, contact->manifolds, contact->manifoldCount );
 			contact->manifolds = NULL;
 			contact->manifoldCount = 0;
+
+			// Invalidate recycling cache.
+			contact->flags &= ~b3_relativeTransformValid;
 			return false;
 		}
 	}
 
-	if ( shapeA->enableHitEvents || shapeB->enableHitEvents )
+	if ( ( shapeA->flags & b3_enableHitEvents ) || ( shapeB->flags & b3_enableHitEvents ) )
 	{
 		contact->flags |= b3_simEnableHitEvent;
 	}
@@ -721,8 +733,9 @@ static bool b3UpdateConvexContact( b3World* world, int workerIndex, b3Contact* c
 
 // Update the contact manifold and touching status.
 // Note: do not assume the shape AABBs are overlapping or are valid.
-bool b3UpdateContact( b3World* world, int workerIndex, b3Contact* contact, b3Shape* shapeA, b3Vec3 localCenterA, b3WorldTransform xfA,
-					  b3Shape* shapeB, b3Vec3 localCenterB, b3WorldTransform xfB, bool isFast, b3Arena arena )
+bool b3UpdateContact( b3World* world, int workerIndex, b3Contact* contact, b3Shape* shapeA, b3Vec3 localCenterA,
+					  b3WorldTransform xfA, b3Shape* shapeB, b3Vec3 localCenterB, b3WorldTransform xfB, bool isFast,
+					  b3Arena arena )
 {
 	bool touching;
 
@@ -738,6 +751,16 @@ bool b3UpdateContact( b3World* world, int workerIndex, b3Contact* contact, b3Sha
 		memcpy( &childShapeA, shapeA, sizeof( b3Shape ) );
 
 		childShapeA.type = child.type;
+
+		// Handle child material for non-meshes.
+		if ( child.type != b3_meshShape )
+		{
+			B3_ASSERT( 0 <= child.materialIndices[0] && child.materialIndices[0] < shapeA->materialCount );
+			const b3SurfaceMaterial* parentMaterials = b3GetShapeMaterials( shapeA );
+			childShapeA.material = parentMaterials[child.materialIndices[0]];
+			childShapeA.materials = NULL;
+			childShapeA.materialCount = 1;
+		}
 
 		if ( child.type == b3_capsuleShape )
 		{
@@ -769,7 +792,7 @@ bool b3UpdateContact( b3World* world, int workerIndex, b3Contact* contact, b3Sha
 			touching = b3ComputeMeshManifolds( world, workerIndex, contact, &childShapeA, child.materialIndices, xfChild, shapeB,
 											   xfB, isFast, arena );
 
-			if ( touching && ( shapeA->enableHitEvents || shapeB->enableHitEvents ) )
+			if ( touching && ( ( shapeA->flags & b3_enableHitEvents ) || ( shapeB->flags & b3_enableHitEvents ) ) )
 			{
 				contact->flags |= b3_simEnableHitEvent;
 			}
@@ -821,7 +844,7 @@ bool b3UpdateContact( b3World* world, int workerIndex, b3Contact* contact, b3Sha
 		// Compute mesh manifolds
 		touching = b3ComputeMeshManifolds( world, workerIndex, contact, shapeA, NULL, xfA, shapeB, xfB, isFast, arena );
 
-		if ( touching && ( shapeA->enableHitEvents || shapeB->enableHitEvents ) )
+		if ( touching && ( ( shapeA->flags & b3_enableHitEvents ) || ( shapeB->flags & b3_enableHitEvents ) ) )
 		{
 			contact->flags |= b3_simEnableHitEvent;
 		}

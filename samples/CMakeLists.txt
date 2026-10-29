@@ -1,5 +1,12 @@
 # Box3D samples
 
+# sokol's Cocoa/Metal backends are Objective-C. gfx/sokol_impl.c and
+# host/sokol_app_impl.c compile as OBJC, so enable the language here where the
+# samples need it. Consumers embedding box3d (no samples) don't require OBJC.
+if(APPLE)
+    enable_language(OBJC)
+endif()
+
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
     GIT_TAG        v1.92.7
@@ -67,6 +74,20 @@ add_library(implot STATIC
 target_link_libraries(implot PUBLIC imgui)
 target_include_directories(implot SYSTEM PUBLIC "${implot_SOURCE_DIR}")
 set_target_properties(implot PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+    POSITION_INDEPENDENT_CODE ON
+)
+
+# ImGuizmo vendored from github.com/CedricGuillemet/ImGuizmo at 18cef5e (2026-08-08), ImGuizmo.cpp/.h only.
+add_library(imguizmo STATIC
+    "${CMAKE_SOURCE_DIR}/extern/imguizmo/ImGuizmo.cpp"
+    "${CMAKE_SOURCE_DIR}/extern/imguizmo/ImGuizmo.h"
+)
+target_link_libraries(imguizmo PUBLIC imgui)
+target_include_directories(imguizmo SYSTEM PUBLIC "${CMAKE_SOURCE_DIR}/extern/imguizmo")
+set_target_properties(imguizmo PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
@@ -148,6 +169,10 @@ set(SAMPLE_FILES
     sample.h
     mesh_loader.cpp
     mesh_loader.h
+    dynamic_mover.cpp
+    dynamic_mover.h
+    geometric_mover.cpp
+    geometric_mover.h
     jsmn.h
     tiny_obj_loader.h
     earcut.h
@@ -168,6 +193,7 @@ set(SAMPLE_FILES
     sample_mesh.cpp
     sample_ragdoll.cpp
     sample_replay.cpp
+    sample_restitution.cpp
     sample_robustness.cpp
     sample_shapes.cpp
     sample_stacking.cpp
@@ -185,14 +211,22 @@ endif()
 
 # Include root is the samples dir so "gfx/..." and "host/..." prefixes resolve.
 # The data dir is on the path too so samples can #include recorded dumps
-# (sample_issues pulls dumps/.../box3d_dump.inl at compile time).
+# (sample_issues pulls dumps/.../box3d_dump.inl at compile time). src is on the
+# path so sample_tree.cpp can reach dynamic_tree.h for the node layout helpers.
 target_include_directories(samples PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../data")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../data"
+    "${CMAKE_SOURCE_DIR}/src")
 
 # gfx: the renderer + Draw*/adapter. shared: human, utils (Random*), the
 # benchmark/determinism helpers the samples lean on.
-target_link_libraries(samples PRIVATE gfx shared imgui implot sokol nfd)
+target_link_libraries(samples PRIVATE gfx shared imgui implot imguizmo sokol nfd)
+
+# MSVC auto-links winmm via a #pragma comment in main.cpp. MinGW ignores that
+# pragma, so link the timeBeginPeriod/timeEndPeriod library explicitly.
+if (MINGW)
+    target_link_libraries(samples PRIVATE winmm)
+endif()
 
 set_target_properties(samples PROPERTIES
     CXX_STANDARD 20

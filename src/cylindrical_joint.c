@@ -13,6 +13,10 @@
 // needed for dll export
 #include "box3d/box3d.h"
 
+// The joint sims share a union. Keep the cylindrical joint from growing every joint sim.
+_Static_assert( sizeof( b3CylindricalJoint ) <= sizeof( b3SphericalJoint ),
+				"b3CylindricalJoint is larger than b3SphericalJoint: it would grow the b3JointSim union" );
+
 // A cylindrical joint is a prismatic joint with one rotation freed. Body B rotates about the x-axis of
 // joint frame A and slides along the slide axis, which is the x-axis by default (coaxial) but may be any
 // direction in frame A. Below, "axis" is the slide axis for the linear rows and the x-axis of frame A
@@ -53,6 +57,13 @@ static b3Quat b3GetCylindricalRelativeRotation( b3Quat quatA, b3Quat quatB )
 	}
 
 	return b3InvMulQuat( quatA, quatB );
+}
+
+// Jacobians of the two coaxial rows C = [qRel.y, qRel.z] for frame A rotation quatA
+static void b3GetCoaxialAxes( b3Quat quatA, b3Quat relQ, b3Vec3* axisY, b3Vec3* axisZ )
+{
+	*axisY = b3MulSV( 0.5f, b3RotateVector( quatA, b3Add( b3MulSV( relQ.s, b3Vec3_axisY ), b3Cross( relQ.v, b3Vec3_axisY ) ) ) );
+	*axisZ = b3MulSV( 0.5f, b3RotateVector( quatA, b3Add( b3MulSV( relQ.s, b3Vec3_axisZ ), b3Cross( relQ.v, b3Vec3_axisZ ) ) ) );
 }
 
 void b3CylindricalJoint_EnableSpring( b3JointId jointId, bool enableSpring )
@@ -469,21 +480,29 @@ b3Vec3 b3GetCylindricalJointForce( b3World* world, b3JointSim* base )
 	return b3RotateVector( transformA.q, force );
 }
 
+// World angular impulse of the joint: the axial rows act about frame A's x-axis, the two coaxial rows
+// along their half-angle Jacobian axes (which carry the 0.5 factor and depend on the relative rotation).
+b3Vec3 b3GetCylindricalJointAngularImpulse( b3World* world, b3JointSim* base )
+{
+	b3CylindricalJoint* joint = &base->cylindricalJoint;
+	b3WorldTransform transformA = b3GetBodyTransform( world, base->bodyIdA );
+	b3WorldTransform transformB = b3GetBodyTransform( world, base->bodyIdB );
+	b3Quat quatA = b3MulQuat( transformA.q, base->localFrameA.q );
+	b3Quat quatB = b3MulQuat( transformB.q, base->localFrameB.q );
+	b3Quat relQ = b3GetCylindricalRelativeRotation( quatA, quatB );
+
+	b3Vec3 axisY, axisZ;
+	b3GetCoaxialAxes( quatA, relQ, &axisY, &axisZ );
+
+	float axialImpulse =
+		joint->angularSpringImpulse + joint->angularMotorImpulse + joint->lowerAngularImpulse - joint->upperAngularImpulse;
+	return b3Blend3( axialImpulse, b3RotateVector( quatA, b3Vec3_axisX ), joint->angularImpulse.x, axisY, joint->angularImpulse.y,
+					 axisZ );
+}
+
 b3Vec3 b3GetCylindricalJointTorque( b3World* world, b3JointSim* base )
 {
-	b3WorldTransform transformA = b3GetBodyTransform( world, base->bodyIdA );
-	b3CylindricalJoint* joint = &base->cylindricalJoint;
-
-	// The perpendicular rows use half-angle Jacobians, so scale them back to torque
-	b3Vec3 impulse = {
-		joint->angularSpringImpulse + joint->angularMotorImpulse + joint->lowerAngularImpulse - joint->upperAngularImpulse,
-		0.5f * joint->angularImpulse.x,
-		0.5f * joint->angularImpulse.y,
-	};
-
-	b3Vec3 torque = b3MulSV( world->inv_h, impulse );
-	torque = b3RotateVector( base->localFrameA.q, torque );
-	return b3RotateVector( transformA.q, torque );
+	return b3MulSV( world->inv_h, b3GetCylindricalJointAngularImpulse( world, base ) );
 }
 
 void b3PrepareCylindricalJoint( b3JointSim* base, b3StepContext* context )
@@ -525,24 +544,11 @@ void b3PrepareCylindricalJoint( b3JointSim* base, b3StepContext* context )
 
 	joint->deltaCenter = b3SubPos( bodySimB->center, bodySimA->center );
 
-	b3Matrix3 matrixA = b3MakeMatrixFromQuat( joint->frameA.q );
-	joint->rotationAxis = matrixA.cx;
+	joint->slideFrameQ = b3MulQuat( joint->frameA.q, joint->slideRotation );
 
-	b3Matrix3 slideMatrix = b3MakeMatrixFromQuat( b3MulQuat( joint->frameA.q, joint->slideRotation ) );
-	joint->slideAxis = slideMatrix.cx;
-	joint->perpAxisY = slideMatrix.cy;
-	joint->perpAxisZ = slideMatrix.cz;
-
-	float k = b3Dot( joint->rotationAxis, b3MulMV( invInertiaSum, joint->rotationAxis ) );
+	b3Vec3 rotationAxis = b3RotateVector( joint->frameA.q, b3Vec3_axisX );
+	float k = b3Dot( rotationAxis, b3MulMV( invInertiaSum, rotationAxis ) );
 	joint->axialAngularMass = k > 0.0f ? 1.0f / k : 0.0f;
-
-	b3Quat relQ = b3GetCylindricalRelativeRotation( joint->frameA.q, joint->frameB.q );
-
-	// Needed for warm starting
-	joint->angularAxisY = b3MulSV(
-		0.5f, b3RotateVector( joint->frameA.q, b3Add( b3MulSV( relQ.s, b3Vec3_axisY ), b3Cross( relQ.v, b3Vec3_axisY ) ) ) );
-	joint->angularAxisZ = b3MulSV(
-		0.5f, b3RotateVector( joint->frameA.q, b3Add( b3MulSV( relQ.s, b3Vec3_axisZ ), b3Cross( relQ.v, b3Vec3_axisZ ) ) ) );
 
 	joint->springSoftness = b3MakeSoft( joint->hertz, joint->dampingRatio, context->h );
 	joint->angularSpringSoftness = b3MakeSoft( joint->angularHertz, joint->angularDampingRatio, context->h );
@@ -582,10 +588,11 @@ void b3WarmStartCylindricalJoint( b3JointSim* base, b3StepContext* context )
 	b3Vec3 rB = b3RotateVector( stateB->deltaRotation, joint->frameB.p );
 	b3Vec3 d = b3Add( b3Add( b3Sub( stateB->deltaPosition, stateA->deltaPosition ), joint->deltaCenter ), b3Sub( rB, rA ) );
 
-	b3Vec3 jointAxis = b3RotateVector( stateA->deltaRotation, joint->slideAxis );
-	b3Vec3 rotationAxis = b3RotateVector( stateA->deltaRotation, joint->rotationAxis );
-	b3Vec3 perpY = b3RotateVector( stateA->deltaRotation, joint->perpAxisY );
-	b3Vec3 perpZ = b3RotateVector( stateA->deltaRotation, joint->perpAxisZ );
+	// Slide frame: x is the slide axis, y and z span the point-to-line rows
+	b3Matrix3 slideMatrix = b3MakeMatrixFromQuat( b3MulQuat( stateA->deltaRotation, joint->slideFrameQ ) );
+	b3Vec3 jointAxis = slideMatrix.cx;
+	b3Vec3 perpY = slideMatrix.cy;
+	b3Vec3 perpZ = slideMatrix.cz;
 	b3Vec3 dA = b3Add( rA, d );
 
 	float axialImpulse = joint->springImpulse + joint->motorImpulse + joint->lowerImpulse - joint->upperImpulse;
@@ -595,10 +602,16 @@ void b3WarmStartCylindricalJoint( b3JointSim* base, b3StepContext* context )
 	b3Vec3 LA = b3Cross( dA, P );
 	b3Vec3 LB = b3Cross( rB, P );
 
+	b3Quat quatA = b3MulQuat( stateA->deltaRotation, joint->frameA.q );
+	b3Quat quatB = b3MulQuat( stateB->deltaRotation, joint->frameB.q );
+	b3Quat relQ = b3GetCylindricalRelativeRotation( quatA, quatB );
+	b3Vec3 axisY, axisZ;
+	b3GetCoaxialAxes( quatA, relQ, &axisY, &axisZ );
+	b3Vec3 rotationAxis = b3RotateVector( quatA, b3Vec3_axisX );
+
 	float axialAngularImpulse =
 		joint->angularSpringImpulse + joint->angularMotorImpulse + joint->lowerAngularImpulse - joint->upperAngularImpulse;
-	b3Vec3 L = b3Blend3( axialAngularImpulse, rotationAxis, joint->angularImpulse.x, joint->angularAxisY, joint->angularImpulse.y,
-						 joint->angularAxisZ );
+	b3Vec3 L = b3Blend3( axialAngularImpulse, rotationAxis, joint->angularImpulse.x, axisY, joint->angularImpulse.y, axisZ );
 
 	if ( stateA->flags & b3_dynamicFlag )
 	{
@@ -641,9 +654,9 @@ void b3SolveCylindricalJoint( b3JointSim* base, b3StepContext* context, bool use
 	b3Vec3 d = b3Add( b3Add( b3Sub( stateB->deltaPosition, stateA->deltaPosition ), joint->deltaCenter ), b3Sub( rB, rA ) );
 	b3Vec3 dA = b3Add( rA, d );
 
-	// Linear rows act along the slide axis, angular rows about the rotation axis
-	b3Vec3 jointAxis = b3RotateVector( stateA->deltaRotation, joint->slideAxis );
-	b3Vec3 rotationAxis = b3RotateVector( stateA->deltaRotation, joint->rotationAxis );
+	// Linear rows act along the slide axis, angular rows about the rotation axis (frame A x)
+	b3Matrix3 slideMatrix = b3MakeMatrixFromQuat( b3MulQuat( stateA->deltaRotation, joint->slideFrameQ ) );
+	b3Vec3 jointAxis = slideMatrix.cx;
 	b3Vec3 sAx = b3Cross( dA, jointAxis );
 	b3Vec3 sBx = b3Cross( rB, jointAxis );
 	float translation = b3Dot( d, jointAxis );
@@ -655,6 +668,7 @@ void b3SolveCylindricalJoint( b3JointSim* base, b3StepContext* context, bool use
 	b3Quat quatA = b3MulQuat( stateA->deltaRotation, joint->frameA.q );
 	b3Quat quatB = b3MulQuat( stateB->deltaRotation, joint->frameB.q );
 	b3Quat relQ = b3GetCylindricalRelativeRotation( quatA, quatB );
+	b3Vec3 rotationAxis = b3RotateVector( quatA, b3Vec3_axisX );
 	float angle = b3GetTwistAngleX( relQ );
 	float axialAngularMass = joint->axialAngularMass;
 
@@ -897,12 +911,8 @@ void b3SolveCylindricalJoint( b3JointSim* base, b3StepContext* context, bool use
 				impulseScale = base->constraintSoftness.impulseScale;
 			}
 
-			b3Vec3 axisY = b3MulSV(
-				0.5f, b3RotateVector( quatA, b3Add( b3MulSV( relQ.s, b3Vec3_axisY ), b3Cross( relQ.v, b3Vec3_axisY ) ) ) );
-			b3Vec3 axisZ = b3MulSV(
-				0.5f, b3RotateVector( quatA, b3Add( b3MulSV( relQ.s, b3Vec3_axisZ ), b3Cross( relQ.v, b3Vec3_axisZ ) ) ) );
-			joint->angularAxisY = axisY;
-			joint->angularAxisZ = axisZ;
+			b3Vec3 axisY, axisZ;
+			b3GetCoaxialAxes( quatA, relQ, &axisY, &axisZ );
 
 			b3Matrix3 invInertiaSum = b3AddMM( iA, iB );
 			float kyy = b3Dot( axisY, b3MulMV( invInertiaSum, axisY ) );
@@ -925,8 +935,8 @@ void b3SolveCylindricalJoint( b3JointSim* base, b3StepContext* context, bool use
 
 	// Point-to-line constraint
 	{
-		b3Vec3 perpY = b3RotateVector( stateA->deltaRotation, joint->perpAxisY );
-		b3Vec3 perpZ = b3RotateVector( stateA->deltaRotation, joint->perpAxisZ );
+		b3Vec3 perpY = slideMatrix.cy;
+		b3Vec3 perpZ = slideMatrix.cz;
 
 		b3Vec2 bias = { 0.0f, 0.0f };
 		float massScale = 1.0f;

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "container.h"
 #include "core.h"
 
 #include "box3d/id.h"
@@ -45,14 +46,17 @@ typedef struct b3World b3World;
 // Magic 'B3RC' in little-endian: bytes B(0x42) 3(0x33) R(0x52) C(0x43)
 #define B3_REC_MAGIC 0x43523342u
 
-// Minor tracks op-stream additions that keep the 48 byte header shape (e.g. the spatial query ops).
-// Minor 2 added the QueryTag op and the interned query-tag table at the tail of the registry block.
-// Major 3 added springStiffness/springDamping to the distance joint def record, plus the cylindrical
-// joint, shape enable/disable and distance joint stiffness ops.
-#define B3_REC_VERSION_MAJOR 3
-#define B3_REC_VERSION_MINOR 0
+// Major recording version is bumped when writers change.
+// Major version 6 widened the body def with the safety factor.
+// Major version 7 added springStiffness/springDamping to the distance joint def record, plus the
+// cylindrical joint, shape enable/disable and distance joint stiffness ops.
+#define B3_REC_VERSION_MAJOR 7
 
-// File header, fixed 48 bytes, little-endian. Contains the registry locator so the player
+// Minor tracks op-stream additions that keep the 48 byte header shape.
+// Minor version 7 made the contact body sim locators persistent
+#define B3_REC_VERSION_MINOR 10
+
+// File header, fixed 48 bytes. Contains the registry locator so the player
 // can load geometry before replaying any ops.
 typedef struct b3RecHeader
 {
@@ -105,24 +109,29 @@ typedef struct b3GeometryEntry
 	int hashNext;
 } b3GeometryEntry;
 
+b3DeclareArray( b3GeometryEntry );
+
 // Growable array of geometry entries. Ids are array indices, so the array is serialized in order.
 // dedupMap maps content hash to entry id for O(1) dedup; it is opaque here and owned by recording.c.
 typedef struct b3GeometryRegistry
 {
-	b3GeometryEntry* entries;
-	int count;
-	int capacity;
+	b3Array( b3GeometryEntry ) entries;
 	void* dedupMap;
 } b3GeometryRegistry;
+
+// Limit the maximum query name length to make recording simpler. Query names longer than this
+// probably indicate a bug in user code.
+#define B3_MAX_QUERY_NAME_LENGTH 64
 
 // Query tag from b3QueryFilter.
 // Stored once per key in the trailing block so a tagged query carries only the 8 byte key on the wire.
 // Shared by the recorder (accumulate) and the player (load).
 typedef struct b3RecTag
 {
-	uint64_t key;				   // hash of (id, name)
-	uint64_t id;				   // entity/actor id
-	char name[B3_BODY_NAME_LENGTH + 1]; // query label
+	// hash of (id, queryName)
+	uint64_t key;
+	uint64_t id;
+	char queryName[B3_MAX_QUERY_NAME_LENGTH + 1];
 } b3RecTag;
 
 // User-owned recording buffer. The world appends into it while active; the host saves and
@@ -190,6 +199,8 @@ typedef b3SphericalJointDef b3RecCType_SPHERICALJOINTDEF;
 typedef b3WeldJointDef b3RecCType_WELDJOINTDEF;
 typedef b3WheelJointDef b3RecCType_WHEELJOINTDEF;
 typedef b3CylindricalJointDef b3RecCType_CYLINDRICALJOINTDEF;
+typedef b3MoverJointDef b3RecCType_MOVERJOINTDEF;
+typedef b3PogoJointDef b3RecCType_POGOJOINTDEF;
 
 // Codegen pass 1a: arg structs. Generated here so call sites (body.c, shape.c, etc.) can see them.
 #define ARG( TAG, field ) b3RecCType_##TAG field;
@@ -248,7 +259,6 @@ void b3RecW_FILTER( b3RecBuffer* buf, b3Filter v );
 void b3RecW_MATERIAL( b3RecBuffer* buf, b3SurfaceMaterial v );
 void b3RecW_MASSDATA( b3RecBuffer* buf, b3MassData v );
 void b3RecW_LOCKS( b3RecBuffer* buf, b3MotionLocks v );
-void b3RecW_STR( b3RecBuffer* buf, const char* s );
 void b3RecW_EXPLOSIONDEF( b3RecBuffer* buf, b3ExplosionDef v );
 void b3RecW_BODYDEF( b3RecBuffer* buf, b3BodyDef v );
 void b3RecW_SHAPEDEF( b3RecBuffer* buf, b3ShapeDef v );
@@ -262,6 +272,8 @@ void b3RecW_SPHERICALJOINTDEF( b3RecBuffer* buf, b3SphericalJointDef v );
 void b3RecW_WELDJOINTDEF( b3RecBuffer* buf, b3WeldJointDef v );
 void b3RecW_WHEELJOINTDEF( b3RecBuffer* buf, b3WheelJointDef v );
 void b3RecW_CYLINDRICALJOINTDEF( b3RecBuffer* buf, b3CylindricalJointDef v );
+void b3RecW_MOVERJOINTDEF( b3RecBuffer* buf, b3MoverJointDef v );
+void b3RecW_POGOJOINTDEF( b3RecBuffer* buf, b3PogoJointDef v );
 
 // Record framing
 void b3RecBeginRecord( b3Recording* rec, uint8_t opcode );
@@ -347,11 +359,11 @@ float b3RecCastTrampoline( b3ShapeId id, b3Pos point, b3Vec3 normal, float fract
 bool b3RecPlaneTrampoline( b3ShapeId id, const b3PlaneResult* planes, int planeCount, void* ctx );
 
 // Geometry registry
-uint32_t b3InternGeometry( b3GeometryRegistry* reg, b3GeometryKind kind, uint64_t contentHash, uint8_t* bytes, int byteCount );
+uint32_t b3InternGeometry( b3GeometryRegistry* reg, b3GeometryKind kind, uint64_t contentHash, const uint8_t* bytes, int byteCount );
 // Append an entry unconditionally and return its id, which equals its array index. Unlike
 // b3InternGeometry it never deduplicates, so the keyframe seed can mirror slots 1:1 even when an
 // already-recorded file carries byte-identical duplicate slots (a hash collision wrote them apart).
-uint32_t b3AppendGeometry( b3GeometryRegistry* reg, b3GeometryKind kind, uint64_t contentHash, uint8_t* bytes, int byteCount );
+uint32_t b3AppendGeometry( b3GeometryRegistry* reg, b3GeometryKind kind, uint64_t contentHash, const uint8_t* bytes, int byteCount );
 void b3FreeRegistry( b3GeometryRegistry* reg );
 void b3RecWriteRegistry( b3Recording* rec );
 
@@ -360,17 +372,13 @@ void b3RecWriteRegistry( b3Recording* rec );
 uint64_t b3HashQueryTag( uint64_t id, const char* name );
 
 // Record a key->(id, name) mapping once, deduped by key (a repeated key keeps its first id/name).
-// The name is clamped to B3_BODY_NAME_LENGTH.
 void b3RecInternTag( b3Recording* rec, uint64_t key, uint64_t id, const char* name );
 
 // Intern each large geometry kind and return a stable u32 id for use in create ops.
-// Caller does NOT free bytes; b3InternGeometry takes ownership (frees on duplicate).
 uint32_t b3RecInternHull( b3Recording* rec, const b3HullData* hull );
 uint32_t b3RecInternMesh( b3Recording* rec, const b3MeshData* mesh );
 uint32_t b3RecInternHeightField( b3Recording* rec, const b3HeightFieldData* hf );
 uint32_t b3RecInternCompound( b3Recording* rec, const b3CompoundData* compound );
-
-uint64_t b3Hash64Blob( const uint8_t* bytes, int n );
 
 // Lifecycle engine-side hooks
 void b3StartRecordingIntoBuffer( b3World* world, b3Recording* recording );

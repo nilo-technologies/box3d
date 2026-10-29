@@ -11,6 +11,7 @@
 //   FLY (right mouse held, no Alt)
 //     right-drag         : FPS look (yaw/pitch the view direction)
 //     WASD               : translate eye along view forward/right at m_speed
+//     QE                 : translate eye along world down/up at m_speed
 //     scroll             : tune m_speed
 //
 //   Always
@@ -112,11 +113,12 @@ public:
 	{
 		m_pivot = pivot;
 	}
- 
-	void SetTarget( b3Pos target )
-	{
-		m_pivot = target;
-	}
+
+	// Aim at a point given in simulation space: length units and the simulation up axis, mapped
+	// into the display frame the pivot lives in, then the transform refreshed. Follow cams read
+	// positions straight from the world, so they land here. Counterpart to DrawOrigin, which maps
+	// the eye back the other way. SetPivot takes a point already in display space.
+	void SetTarget( b3Pos target );
 
 	// Frame an AABB: keep current yaw/pitch, move pivot to the AABB center,
 	// and refit radius so the AABB fits in view at the current FOV+aspect.
@@ -131,6 +133,12 @@ public:
 	{
 		m_near = near;
 		m_far = far;
+	}
+
+	// Draw/cull box half extent around the eye, in meters. Drives DrawBounds.
+	void SetDrawDistance( float meters )
+	{
+		m_drawDistance = meters;
 	}
 
 	// Recomputes the projection. Call after any SetFov / SetClip change, or
@@ -164,11 +172,11 @@ public:
 	}
 
 	// Cull box for b3World_Draw, in simulation space (length units): a cube of the
-	// view distance centered on the simulation eye, so the draw set matches the far
-	// plane reach. The broad phase is queried in length units, hence the scale.
+	// draw distance centered on the simulation eye. The broad phase is queried in
+	// length units, hence the scale.
 	b3AABB DrawBounds() const
 	{
-		float h = kViewDistance * m_lengthUnitsPerMeter;
+		float h = m_drawDistance * m_lengthUnitsPerMeter;
 		b3Vec3 r = { h, h, h };
 		return b3OffsetAABB( { b3Neg( r ), r }, DrawOrigin() );
 	}
@@ -181,6 +189,10 @@ public:
 	float m_fov; // radians, vertical
 	float m_near;
 	float m_far;
+
+	// Half extent of the draw/cull box around the eye (meters). Independent of the
+	// far plane, so it shrinks the draw set without touching the projection.
+	float m_drawDistance;
 
 	// Fly-mode translation speed, m/s. Scroll-tunable while right-mouse held.
 	float m_speed;
@@ -207,9 +219,8 @@ public:
 	b3Vec3 m_up;
 	b3Vec3 m_forward;
 
-	// All four matrices are produced together — view / viewInv from the basis,
-	// proj / projInv from fov/aspect/near/far — so the renderer never inverts
-	// at runtime.
+	// All four matrices are produced together: view / viewInv from the basis,
+	// proj / projInv from fov/aspect/near/far.
 	Mat4 m_view;
 	Mat4 m_viewInv;
 	Mat4 m_proj;
@@ -243,4 +254,6 @@ public:
 	bool m_aDown = false;
 	bool m_sDown = false;
 	bool m_dDown = false;
+	bool m_qDown = false;
+	bool m_eDown = false;
 };

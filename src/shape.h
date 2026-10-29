@@ -5,12 +5,26 @@
 
 #include "math_internal.h"
 
+#include "box3d/collision.h"
 #include "box3d/types.h"
 
 #include <stdbool.h>
 
 typedef struct b3BroadPhase b3BroadPhase;
 typedef struct b3World b3World;
+
+typedef enum b3ShapeFlags
+{
+	b3_enableSensorEvents = 0x01,
+	b3_enableContactEvents = 0x02,
+	b3_enableCustomFiltering = 0x04,
+	b3_enableHitEvents = 0x08,
+	b3_enablePreSolveEvents = 0x10,
+	// 0x20 is free, it was the enlarged AABB flag before the broad-phase marked the tree
+	b3_enableSpeculative = 0x40,
+	// Set by b3Shape_Disable: the shape has no broad-phase proxy, contacts, sensor overlaps or query hits
+	b3_isDisabled = 0x80,
+} b3ShapeFlags;
 
 typedef struct b3Shape
 {
@@ -26,26 +40,21 @@ typedef struct b3Shape
 	float aabbMargin;
 
 	b3AABB aabb;
-	b3AABB fatAABB;
 	b3Vec3 localCentroid;
 
-	b3SurfaceMaterial material;
 	int materialCount;
+	b3SurfaceMaterial material;
 	b3SurfaceMaterial* materials;
 
 	b3Filter filter;
 	void* userData;
 	void* userShape;
 
+	uint32_t nameId;
 	uint16_t generation;
-	bool enableSensorEvents;
-	bool enableContactEvents;
-	bool enableCustomFiltering;
-	bool enableHitEvents;
-	bool enablePreSolveEvents;
-	bool enlargedAABB;
-	// false after b3Shape_Disable: the shape has no broad-phase proxy, contacts, sensor overlaps or query hits
-	bool enabled;
+
+	// b3ShapeFlags
+	uint8_t flags;
 
 	union
 	{
@@ -67,13 +76,20 @@ static inline b3SurfaceMaterial* b3GetShapeMaterials( const b3Shape* shape )
 	return shape->materials != NULL ? shape->materials : (b3SurfaceMaterial*)&shape->material;
 }
 
-void b3CreateShapeProxy( b3Shape* shape, b3BroadPhase* bp, b3BodyType type, b3WorldTransform transform, bool forcePairCreation );
+// False after b3Shape_Disable
+static inline bool b3IsShapeEnabled( const b3Shape* shape )
+{
+	return ( shape->flags & b3_isDisabled ) == 0;
+}
+
+void b3CreateShapeProxy( b3World* world, b3Shape* shape, b3BodyType type, b3WorldTransform transform, bool forcePairCreation );
 void b3DestroyShapeProxy( b3Shape* shape, b3BroadPhase* bp );
 
 void b3DestroyShapeAllocations( b3World* world, b3Shape* shape );
 
 b3MassData b3ComputeShapeMass( const b3Shape* shape );
 b3ShapeExtent b3ComputeShapeExtent( const b3Shape* shape, b3Vec3 localCenter );
+float b3ComputeShapeMinExtent( const b3Shape* shape, b3Vec3 localCenter );
 
 b3AABB b3ComputeSweptSphereAABB( const b3Sphere* shape, b3Transform xf1, b3Transform xf2 );
 b3AABB b3ComputeSweptCapsuleAABB( const b3Capsule* shape, b3Transform xf1, b3Transform xf2 );
@@ -128,9 +144,53 @@ static inline int b3GetHeightFieldTriangleCount( const b3HeightFieldData* height
 }
 
 // Mesh
-b3Triangle b3GetMeshTriangle( const b3Mesh* mesh, int triangleIndex );
+
+// Making this inline made the tree benchmarks faster.
+static inline b3Triangle b3GetMeshTriangle( const b3Mesh* mesh, int triangleIndex )
+{
+	B3_ASSERT( 0 <= triangleIndex && triangleIndex < mesh->data->triangleCount );
+
+	const b3MeshTriangle* triangles = b3GetMeshTriangles( mesh->data );
+	const uint8_t* flags = b3GetMeshFlags( mesh->data );
+	const b3Vec3* vertices = b3GetMeshVertices( mesh->data );
+
+	b3Triangle result;
+	b3MeshTriangle triangle = triangles[triangleIndex];
+	uint8_t triangleFlags = flags[triangleIndex];
+
+	b3Vec3 scale = mesh->scale;
+
+	result.vertices[0] = b3Mul( scale, vertices[triangle.index1] );
+	result.i1 = triangle.index1;
+
+	if ( scale.x * scale.y * scale.z < 0.0f )
+	{
+		result.vertices[1] = b3Mul( scale, vertices[triangle.index3] );
+		result.vertices[2] = b3Mul( scale, vertices[triangle.index2] );
+
+		result.i2 = triangle.index3;
+		result.i3 = triangle.index2;
+
+		// mesh is inverted, so concave edges are now convex
+		result.flags = 0;
+		result.flags |= ( triangleFlags & b3_inverseConcaveEdge1 ) ? b3_concaveEdge1 : 0;
+		result.flags |= ( triangleFlags & b3_inverseConcaveEdge2 ) ? b3_concaveEdge2 : 0;
+		result.flags |= ( triangleFlags & b3_inverseConcaveEdge3 ) ? b3_concaveEdge3 : 0;
+	}
+	else
+	{
+		result.vertices[1] = b3Mul( scale, vertices[triangle.index2] );
+		result.vertices[2] = b3Mul( scale, vertices[triangle.index3] );
+
+		result.i2 = triangle.index2;
+		result.i3 = triangle.index3;
+		result.flags = triangleFlags;
+	}
+
+	return result;
+}
+
 bool b3IsValidMesh( const b3MeshData* meshData );
-void b3DumpShape( b3World* world, int shapeIndex );
 
 static inline bool b3ShouldShapesCollide( b3Filter filterA, b3Filter filterB )
 {
@@ -146,4 +206,9 @@ static inline bool b3ShouldQueryCollide( const b3Filter* shapeFilter, const b3Qu
 {
 	return ( shapeFilter->categoryBits & queryFilter->maskBits ) != 0 &&
 		   ( shapeFilter->maskBits & queryFilter->categoryBits ) != 0;
+}
+
+static inline bool b3IsConvex( b3ShapeType type )
+{
+	return type == b3_sphereShape || type == b3_capsuleShape || type == b3_hullShape;
 }

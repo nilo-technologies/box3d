@@ -123,6 +123,39 @@ typedef struct b3MotorJoint
 	b3Matrix3 angularMass;
 } b3MotorJoint;
 
+typedef struct b3MoverJoint
+{
+	b3Vec3 linearVelocity;
+	float maxForce;
+
+	b3Vec3 axisX;
+	b3Vec3 axisZ;
+	b3Vec2 impulse;
+
+	int indexA;
+	int indexB;
+	float linearMass;
+} b3MoverJoint;
+
+typedef struct b3PogoJoint
+{
+	b3Vec3 normal;
+	float restLength;
+	float hertz;
+	float dampingRatio;
+	float maxTensionForce;
+	float maxCompressionForce;
+
+	float impulse;
+	int indexA;
+	int indexB;
+	b3Transform frameA;
+	b3Transform frameB;
+	b3Vec3 deltaCenter;
+	float linearMass;
+	float velocity;
+} b3PogoJoint;
+
 typedef struct b3ParallelJoint
 {
 	float hertz;
@@ -208,14 +241,10 @@ typedef struct b3CylindricalJoint
 	int indexB;
 	b3Transform frameA;
 	b3Transform frameB;
-	// world slide axis and the two perpendicular axes of the point-to-line constraint
-	b3Vec3 slideAxis;
-	b3Vec3 perpAxisY;
-	b3Vec3 perpAxisZ;
-	// world rotation axis, the x-axis of frame A
-	b3Vec3 rotationAxis;
-	b3Vec3 angularAxisY;
-	b3Vec3 angularAxisZ;
+	// World rotation of the slide frame: x is the slide axis, y and z span the point-to-line rows.
+	// The rotation axis (frame A x) and the coaxial Jacobians are derived from frameA/frameB when
+	// needed rather than cached, which keeps this struct no larger than the spherical joint.
+	b3Quat slideFrameQ;
 	b3Vec3 deltaCenter;
 	float axialAngularMass;
 	b3Softness springSoftness;
@@ -395,7 +424,9 @@ typedef struct b3JointSim
 		b3CylindricalJoint cylindricalJoint;
 		b3DistanceJoint distanceJoint;
 		b3MotorJoint motorJoint;
+		b3MoverJoint moverJoint;
 		b3ParallelJoint parallelJoint;
+		b3PogoJoint pogoJoint;
 		b3RevoluteJoint revoluteJoint;
 		b3SphericalJoint sphericalJoint;
 		b3PrismaticJoint prismaticJoint;
@@ -425,12 +456,15 @@ void b3DrawJoint( b3DebugDraw* draw, b3World* world, b3Joint* joint );
 b3Vec3 b3GetCylindricalJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetDistanceJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetMotorJointForce( b3World* world, b3JointSim* base );
+b3Vec3 b3GetMoverJointForce( b3World* world, b3JointSim* base );
+b3Vec3 b3GetPogoJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetPrismaticJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetRevoluteJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetSphericalJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetWeldJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetWheelJointForce( b3World* world, b3JointSim* base );
 
+b3Vec3 b3GetCylindricalJointAngularImpulse( b3World* world, b3JointSim* base );
 b3Vec3 b3GetCylindricalJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetMotorJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetParallelJointTorque( b3World* world, b3JointSim* base );
@@ -443,6 +477,8 @@ b3Vec3 b3GetWheelJointTorque( b3World* world, b3JointSim* base );
 void b3PrepareCylindricalJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareDistanceJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareMotorJoint( b3JointSim* base, b3StepContext* context );
+void b3PrepareMoverJoint( b3JointSim* base, b3StepContext* context );
+void b3PreparePogoJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareParallelJoint( b3JointSim* base, b3StepContext* context );
 void b3PreparePrismaticJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareRevoluteJoint( b3JointSim* base, b3StepContext* context );
@@ -453,6 +489,8 @@ void b3PrepareWheelJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartCylindricalJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartDistanceJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartMotorJoint( b3JointSim* base, b3StepContext* context );
+void b3WarmStartMoverJoint( b3JointSim* base, b3StepContext* context );
+void b3WarmStartPogoJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartParallelJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartPrismaticJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartRevoluteJoint( b3JointSim* base, b3StepContext* context );
@@ -463,6 +501,8 @@ void b3WarmStartWheelJoint( b3JointSim* base, b3StepContext* context );
 void b3SolveCylindricalJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveDistanceJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveMotorJoint( b3JointSim* base, b3StepContext* context );
+void b3SolveMoverJoint( b3JointSim* base, b3StepContext* context );
+void b3SolvePogoJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveParallelJoint( b3JointSim* base, b3StepContext* context );
 void b3SolvePrismaticJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveRevoluteJoint( b3JointSim* base, b3StepContext* context, bool useBias );
@@ -472,9 +512,56 @@ void b3SolveWheelJoint( b3JointSim* base, b3StepContext* context, bool useBias )
 
 void b3DrawCylindricalJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawDistanceJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB );
+void b3DrawMoverJoint( b3DebugDraw* draw, b3World* world, b3JointSim* base, b3WorldTransform transformA,
+					   b3WorldTransform transformB );
+void b3DrawPogoJoint( b3DebugDraw* draw, b3World* world, b3JointSim* base, b3WorldTransform transformA,
+					  b3WorldTransform transformB, float scale );
 void b3DrawParallelJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawPrismaticJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawRevoluteJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawSphericalJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawWeldJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawWheelJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
+
+// K = [(1/m1 + 1/m2) * eye(2) - skew(r1) * invI1 * skew(r1) - skew(r2) * invI2 * skew(r2)]
+static inline b3Vec3 b3SolvePointConstraint( float mA, float mB, b3Matrix3 iA, b3Matrix3 iB, b3Vec3 rA, b3Vec3 rB, b3Vec3 rhs )
+{
+	float axy = rA.z * iA.cy.y - rA.y * iA.cz.y;
+	float axz = rA.z * iA.cy.z - rA.y * iA.cz.z;
+	b3Vec3 ay = b3Sub( b3MulSV( rA.x, iA.cz ), b3MulSV( rA.z, iA.cx ) );
+	b3Vec3 az = b3Sub( b3MulSV( rA.y, iA.cx ), b3MulSV( rA.x, iA.cy ) );
+
+	float bxy = rB.z * iB.cy.y - rB.y * iB.cz.y;
+	float bxz = rB.z * iB.cy.z - rB.y * iB.cz.z;
+	b3Vec3 by = b3Sub( b3MulSV( rB.x, iB.cz ), b3MulSV( rB.z, iB.cx ) );
+	b3Vec3 bz = b3Sub( b3MulSV( rB.y, iB.cx ), b3MulSV( rB.x, iB.cy ) );
+
+	float m = mA + mB;
+	float kxx = ( axy * rA.z - axz * rA.y ) + ( bxy * rB.z - bxz * rB.y ) + m;
+	float kyy = ( ay.z * rA.x - ay.x * rA.z ) + ( by.z * rB.x - by.x * rB.z ) + m;
+	float kzz = ( az.x * rA.y - az.y * rA.x ) + ( bz.x * rB.y - bz.y * rB.x ) + m;
+	float kxy = ( ay.y * rA.z - ay.z * rA.y ) + ( by.y * rB.z - by.z * rB.y );
+	float kxz = ( az.y * rA.z - az.z * rA.y ) + ( bz.y * rB.z - bz.z * rB.y );
+	float kyz = ( az.z * rA.x - az.x * rA.z ) + ( bz.z * rB.x - bz.x * rB.z );
+
+	float cxx = kyy * kzz - kyz * kyz;
+	float cyy = kxx * kzz - kxz * kxz;
+	float czz = kxx * kyy - kxy * kxy;
+	float cxy = kxz * kyz - kxy * kzz;
+	float cxz = kxy * kyz - kyy * kxz;
+	float cyz = kxy * kxz - kxx * kyz;
+
+	float det = kxx * cxx + kxy * cxy + kxz * cxz;
+	if ( b3AbsFloat( det ) > 1000.0f * FLT_MIN )
+	{
+		float invDet = 1.0f / det;
+		b3Vec3 b = {
+			invDet * ( cxx * rhs.x + cxy * rhs.y + cxz * rhs.z ),
+			invDet * ( cxy * rhs.x + cyy * rhs.y + cyz * rhs.z ),
+			invDet * ( cxz * rhs.x + cyz * rhs.y + czz * rhs.z ),
+		};
+		return b;
+	}
+
+	return b3Vec3_zero;
+}

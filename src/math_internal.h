@@ -61,6 +61,7 @@ b3Matrix3 b3BoxInertia( float mass, b3Vec3 min, b3Vec3 max );
 int b3GetProxySupport( const b3ShapeProxy* proxy, b3Vec3 axis );
 int b3GetPointSupport( const b3Vec3* points, int count, b3Vec3 axis );
 
+// Align up to 8 byte alignment.
 static inline size_t b3AlignUp8( size_t x )
 {
 	return ( x + 7u ) & ~(size_t)7u;
@@ -203,14 +204,16 @@ static inline b3Quat b3QuatFromExponentialMap( b3Vec3 v )
 /// q2 = q1 + 0.5 * omega * q1
 static inline b3Quat b3IntegrateRotation( b3Quat q1, b3Vec3 deltaRotation )
 {
+#if 1
 	// https://fgiesen.wordpress.com/2012/08/24/quaternion-differentiation/
 	b3Quat qd = { b3MulSV( 0.5f, deltaRotation ), 0.0f };
 	qd = b3MulQuat( qd, q1 );
 	b3Quat q2 = { b3Add( q1.v, qd.v ), qd.s + q1.s };
 	q2 = b3NormalizeQuat( q2 );
 	return q2;
-
-	// return b3NormalizeQuat( b3MulQuat(b3QuatFromExponentialMap( deltaRotation ), q1) );
+#else
+	return b3NormalizeQuat( b3MulQuat(b3QuatFromExponentialMap( deltaRotation ), q1) );
+#endif
 }
 
 // Pseudo angular velocity from a quaternion target
@@ -389,16 +392,6 @@ static inline b3Vec3 b3ModifiedCross( b3Vec3 a, b3Vec3 b )
 static inline b3Matrix3 b3MakeDiagonalMatrix( float a, float b, float c )
 {
 	return (b3Matrix3){ { a, 0.0f, 0.0f }, { 0.0f, b, 0.0f }, { 0.0f, 0.0f, c } };
-}
-
-static inline b3Matrix3 b3Skew( b3Vec3 v )
-{
-	b3Matrix3 out;
-	out.cx = (b3Vec3){ 0, v.z, -v.y };
-	out.cy = (b3Vec3){ -v.z, 0, v.x };
-	out.cz = (b3Vec3){ v.y, -v.x, 0 };
-
-	return out;
 }
 
 static inline b3Plane b3NormalizePlane( b3Plane plane )

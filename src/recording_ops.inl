@@ -14,10 +14,13 @@
 //   0x20-0x3F  body mutators
 //   0x40-0x4F  shape create/destroy
 //   0x50-0x6F  shape mutators
-//   0x70-0x7F  cylindrical joint (create + mutators)
+//   0x70       world config overflow
+//   0x71-0x7F  cylindrical joint (create + mutators)
 //   0x80       step
-//   0x81-0x8F  cylindrical joint mutators continued, distance joint stiffness
+//   0x81-0x8A  mover and pogo joints
+//   0x8B-0x8F  cylindrical joint mutators continued, distance joint stiffness
 //   0x90-0xE7  joints (create, generic, per-type)
+//   0xE8-0xEF  spatial queries
 //   0xF0-0xFF  markers
 
 // Recordings are seeded with a world snapshot, not a CreateWorld op. DestroyWorld stays as the
@@ -39,6 +42,9 @@ B3_REC_OP( 0x0A, WorldSetMaximumLinearSpeed, RET_NONE, ARG( WORLDID, world ) ARG
 B3_REC_OP( 0x0B, WorldEnableWarmStarting, RET_NONE, ARG( WORLDID, world ) ARG( BOOL, flag ) )
 B3_REC_OP( 0x0C, WorldRebuildStaticTree, RET_NONE, ARG( WORLDID, world ) )
 B3_REC_OP( 0x0D, WorldEnableSpeculative, RET_NONE, ARG( WORLDID, world ) ARG( BOOL, flag ) )
+B3_REC_OP( 0x0E, WorldSetRestitutionIterations, RET_NONE, ARG( WORLDID, world ) ARG( I32, iterations ) )
+B3_REC_OP( 0x0F, WorldEnableRestitutionPropagation, RET_NONE, ARG( WORLDID, world ) ARG( BOOL, flag ) )
+B3_REC_OP( 0x70, WorldSetIsotropicInertiaTolerance, RET_NONE, ARG( WORLDID, world ) ARG( F32, tolerance ) )
 
 // Body
 B3_REC_OP( 0x10, CreateBody, RET_BODYID, ARG( WORLDID, world ) ARG( BODYDEF, def ) )
@@ -69,6 +75,8 @@ B3_REC_OP( 0x36, BodySetMotionLocks, RET_NONE, ARG( BODYID, body ) ARG( LOCKS, l
 B3_REC_OP( 0x37, BodySetBullet, RET_NONE, ARG( BODYID, body ) ARG( BOOL, flag ) )
 B3_REC_OP( 0x38, BodyEnableContactRecycling, RET_NONE, ARG( BODYID, body ) ARG( BOOL, flag ) )
 B3_REC_OP( 0x39, BodyEnableHitEvents, RET_NONE, ARG( BODYID, body ) ARG( BOOL, flag ) )
+B3_REC_OP( 0x3A, BodyAllowFastRotation, RET_NONE, ARG( BODYID, body ) ARG( BOOL, flag ) )
+B3_REC_OP( 0x3B, BodySetSafetyFactor, RET_NONE, ARG( BODYID, body ) ARG( F32, value ) )
 
 // Shape create/destroy
 B3_REC_OP( 0x40, CreateSphereShape, RET_SHAPEID, ARG( BODYID, body ) ARG( SHAPEDEF, def ) ARG( SPHERE, sphere ) )
@@ -91,34 +99,38 @@ B3_REC_OP( 0x57, ShapeEnablePreSolveEvents, RET_NONE, ARG( SHAPEID, shape ) ARG(
 B3_REC_OP( 0x58, ShapeEnableHitEvents, RET_NONE, ARG( SHAPEID, shape ) ARG( BOOL, flag ) )
 B3_REC_OP( 0x59, ShapeSetSphere, RET_NONE, ARG( SHAPEID, shape ) ARG( SPHERE, sphere ) )
 B3_REC_OP( 0x5A, ShapeSetCapsule, RET_NONE, ARG( SHAPEID, shape ) ARG( CAPSULE, capsule ) )
-B3_REC_OP( 0x5B, ShapeApplyWind, RET_NONE,
-		   ARG( SHAPEID, shape ) ARG( VEC3, wind ) ARG( F32, drag ) ARG( F32, lift ) ARG( F32, maxSpeed ) ARG( BOOL, wake ) )
-B3_REC_OP( 0x5C, ShapeDisable, RET_NONE, ARG( SHAPEID, shape ) )
-B3_REC_OP( 0x5D, ShapeEnable, RET_NONE, ARG( SHAPEID, shape ) )
+B3_REC_OP( 0x5B, ShapeApplyWind, RET_NONE, ARG( SHAPEID, shape ) ARG( VEC3, wind ) ARG( F32, drag ) ARG( F32, lift ) ARG( F32, maxSpeed ) ARG( BOOL, wake ) )
+B3_REC_OP( 0x5C, ShapeSetName, RET_NONE, ARG( SHAPEID, shape ) ARG( STR, name ) )
+B3_REC_OP( 0x5D, ShapeSetMeshMaterial, RET_NONE, ARG( SHAPEID, shape ) ARG( MATERIAL, material ) ARG( I32, index ) )
+B3_REC_OP( 0x5E, ShapeSetHull, RET_NONE, ARG( SHAPEID, shape ) ARG( GEOMID, geometryId ) )
+B3_REC_OP( 0x5F, ShapeSetMesh, RET_NONE, ARG( SHAPEID, shape ) ARG( GEOMID, geometryId ) ARG( VEC3, scale ) )
+B3_REC_OP( 0x60, ShapeDisable, RET_NONE, ARG( SHAPEID, shape ) )
+B3_REC_OP( 0x61, ShapeEnable, RET_NONE, ARG( SHAPEID, shape ) )
 
-// Cylindrical joint. Added after the original joint block, so it lives in the free 0x70-0x8F range.
-B3_REC_OP( 0x70, CreateCylindricalJoint, RET_JOINTID, ARG( WORLDID, world ) ARG( CYLINDRICALJOINTDEF, def ) )
-B3_REC_OP( 0x71, CylindricalJointEnableSpring, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableSpring ) )
-B3_REC_OP( 0x72, CylindricalJointSetSpringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
-B3_REC_OP( 0x73, CylindricalJointSetSpringDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
-B3_REC_OP( 0x74, CylindricalJointSetTargetTranslation, RET_NONE, ARG( JOINTID, joint ) ARG( F32, translation ) )
-B3_REC_OP( 0x75, CylindricalJointEnableLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
-B3_REC_OP( 0x76, CylindricalJointSetLimits, RET_NONE, ARG( JOINTID, joint ) ARG( F32, lower ) ARG( F32, upper ) )
-B3_REC_OP( 0x77, CylindricalJointEnableMotor, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableMotor ) )
-B3_REC_OP( 0x78, CylindricalJointSetMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
-B3_REC_OP( 0x79, CylindricalJointSetMaxMotorForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, force ) )
-B3_REC_OP( 0x7A, CylindricalJointEnableAngularSpring, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableSpring ) )
-B3_REC_OP( 0x7B, CylindricalJointSetAngularSpringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
-B3_REC_OP( 0x7C, CylindricalJointSetAngularSpringDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
-B3_REC_OP( 0x7D, CylindricalJointSetTargetAngle, RET_NONE, ARG( JOINTID, joint ) ARG( F32, angle ) )
-B3_REC_OP( 0x7E, CylindricalJointEnableAngularLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
-B3_REC_OP( 0x7F, CylindricalJointSetAngularLimits, RET_NONE, ARG( JOINTID, joint ) ARG( F32, lower ) ARG( F32, upper ) )
-B3_REC_OP( 0x81, CylindricalJointEnableAngularMotor, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableMotor ) )
-B3_REC_OP( 0x82, CylindricalJointSetAngularMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
-B3_REC_OP( 0x83, CylindricalJointSetMaxMotorTorque, RET_NONE, ARG( JOINTID, joint ) ARG( F32, torque ) )
+// Cylindrical joint. Added after the original joint block, so it lives in the free 0x71-0x7F and
+// 0x8B-0x8E ranges.
+B3_REC_OP( 0x71, CreateCylindricalJoint, RET_JOINTID, ARG( WORLDID, world ) ARG( CYLINDRICALJOINTDEF, def ) )
+B3_REC_OP( 0x72, CylindricalJointEnableSpring, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableSpring ) )
+B3_REC_OP( 0x73, CylindricalJointSetSpringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
+B3_REC_OP( 0x74, CylindricalJointSetSpringDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
+B3_REC_OP( 0x75, CylindricalJointSetTargetTranslation, RET_NONE, ARG( JOINTID, joint ) ARG( F32, translation ) )
+B3_REC_OP( 0x76, CylindricalJointEnableLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
+B3_REC_OP( 0x77, CylindricalJointSetLimits, RET_NONE, ARG( JOINTID, joint ) ARG( F32, lower ) ARG( F32, upper ) )
+B3_REC_OP( 0x78, CylindricalJointEnableMotor, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableMotor ) )
+B3_REC_OP( 0x79, CylindricalJointSetMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
+B3_REC_OP( 0x7A, CylindricalJointSetMaxMotorForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, force ) )
+B3_REC_OP( 0x7B, CylindricalJointEnableAngularSpring, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableSpring ) )
+B3_REC_OP( 0x7C, CylindricalJointSetAngularSpringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
+B3_REC_OP( 0x7D, CylindricalJointSetAngularSpringDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
+B3_REC_OP( 0x7E, CylindricalJointSetTargetAngle, RET_NONE, ARG( JOINTID, joint ) ARG( F32, angle ) )
+B3_REC_OP( 0x7F, CylindricalJointEnableAngularLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
+B3_REC_OP( 0x8B, CylindricalJointSetAngularLimits, RET_NONE, ARG( JOINTID, joint ) ARG( F32, lower ) ARG( F32, upper ) )
+B3_REC_OP( 0x8C, CylindricalJointEnableAngularMotor, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableMotor ) )
+B3_REC_OP( 0x8D, CylindricalJointSetAngularMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
+B3_REC_OP( 0x8E, CylindricalJointSetMaxMotorTorque, RET_NONE, ARG( JOINTID, joint ) ARG( F32, torque ) )
 
 // Distance joint spring in stiffness units
-B3_REC_OP( 0x84, DistanceJointSetSpringStiffness, RET_NONE, ARG( JOINTID, joint ) ARG( F32, stiffness ) ARG( F32, damping ) )
+B3_REC_OP( 0x8F, DistanceJointSetSpringStiffness, RET_NONE, ARG( JOINTID, joint ) ARG( F32, stiffness ) ARG( F32, damping ) )
 
 // Joint create and destroy
 B3_REC_OP( 0x90, CreateParallelJoint, RET_JOINTID, ARG( WORLDID, world ) ARG( PARALLELJOINTDEF, def ) )
@@ -158,7 +170,7 @@ B3_REC_OP( 0xAB, DistanceJointEnableMotor, RET_NONE, ARG( JOINTID, joint ) ARG( 
 B3_REC_OP( 0xAC, DistanceJointSetMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
 B3_REC_OP( 0xAD, DistanceJointSetMaxMotorForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, force ) )
 
-// Motor joint (3D: linear/angular velocities are vec3)
+// Motor joint
 B3_REC_OP( 0xAE, MotorJointSetLinearVelocity, RET_NONE, ARG( JOINTID, joint ) ARG( VEC3, velocity ) )
 B3_REC_OP( 0xAF, MotorJointSetAngularVelocity, RET_NONE, ARG( JOINTID, joint ) ARG( VEC3, velocity ) )
 B3_REC_OP( 0xB0, MotorJointSetMaxVelocityForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, maxForce ) )
@@ -192,7 +204,7 @@ B3_REC_OP( 0xC7, RevoluteJointEnableMotor, RET_NONE, ARG( JOINTID, joint ) ARG( 
 B3_REC_OP( 0xC8, RevoluteJointSetMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
 B3_REC_OP( 0xC9, RevoluteJointSetMaxMotorTorque, RET_NONE, ARG( JOINTID, joint ) ARG( F32, torque ) )
 
-// Spherical joint (3D-only)
+// Spherical joint
 B3_REC_OP( 0xCA, SphericalJointEnableConeLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
 B3_REC_OP( 0xCB, SphericalJointSetConeLimit, RET_NONE, ARG( JOINTID, joint ) ARG( F32, angleRadians ) )
 B3_REC_OP( 0xCC, SphericalJointEnableTwistLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
@@ -211,7 +223,7 @@ B3_REC_OP( 0xD6, WeldJointSetLinearDampingRatio, RET_NONE, ARG( JOINTID, joint )
 B3_REC_OP( 0xD7, WeldJointSetAngularHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
 B3_REC_OP( 0xD8, WeldJointSetAngularDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
 
-// Wheel joint (Box3D uses Suspension/Spin/Steering naming)
+// Wheel joint
 B3_REC_OP( 0xD9, WheelJointEnableSuspension, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, flag ) )
 B3_REC_OP( 0xDA, WheelJointSetSuspensionHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
 B3_REC_OP( 0xDB, WheelJointSetSuspensionDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
@@ -220,8 +232,7 @@ B3_REC_OP( 0xDD, WheelJointSetSuspensionLimits, RET_NONE, ARG( JOINTID, joint ) 
 B3_REC_OP( 0xDE, WheelJointEnableSpinMotor, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, flag ) )
 B3_REC_OP( 0xDF, WheelJointSetSpinMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, speed ) )
 
-// Wheel joint continued, overflow past the 0xDF range. Opcodes are arbitrary and need not match
-// Box2D, so the wheel ops keep 0xE0-0xE7 and queries follow at 0xE8.
+// Wheel joint continued, overflow past the 0xDF range.
 B3_REC_OP( 0xE0, WheelJointSetMaxSpinTorque, RET_NONE, ARG( JOINTID, joint ) ARG( F32, torque ) )
 B3_REC_OP( 0xE1, WheelJointEnableSteering, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, flag ) )
 B3_REC_OP( 0xE2, WheelJointSetSteeringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
@@ -231,10 +242,22 @@ B3_REC_OP( 0xE5, WheelJointEnableSteeringLimit, RET_NONE, ARG( JOINTID, joint ) 
 B3_REC_OP( 0xE6, WheelJointSetSteeringLimits, RET_NONE, ARG( JOINTID, joint ) ARG( F32, lower ) ARG( F32, upper ) )
 B3_REC_OP( 0xE7, WheelJointSetTargetSteeringAngle, RET_NONE, ARG( JOINTID, joint ) ARG( F32, radians ) )
 
+// Mover joint
+B3_REC_OP( 0x81, CreateMoverJoint, RET_JOINTID, ARG( WORLDID, world ) ARG( MOVERJOINTDEF, def ) )
+B3_REC_OP( 0x82, MoverJointSetLinearVelocity, RET_NONE, ARG( JOINTID, joint ) ARG( VEC3, velocity ) )
+B3_REC_OP( 0x83, MoverJointSetMaxVelocityForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, maxForce ) )
+
+// Pogo joint
+B3_REC_OP( 0x84, CreatePogoJoint, RET_JOINTID, ARG( WORLDID, world ) ARG( POGOJOINTDEF, def ) )
+B3_REC_OP( 0x85, PogoJointSetRestLength, RET_NONE, ARG( JOINTID, joint ) ARG( F32, length ) )
+B3_REC_OP( 0x86, PogoJointSetSpringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
+B3_REC_OP( 0x87, PogoJointSetSpringDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
+B3_REC_OP( 0x88, PogoJointSetMaxTensionForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, force ) )
+B3_REC_OP( 0x89, PogoJointSetMaxCompressionForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, force ) )
+B3_REC_OP( 0x8A, PogoJointSetNormal, RET_NONE, ARG( JOINTID, joint ) ARG( VEC3, normal ) )
+
 // Spatial queries. Inputs flow through the manifest (reader side). The hit tail and result are
-// hand-written in recording.c / recording_replay.c since they are variable length. Query geometry is
-// relative to the origin so a recording reproduces queries far from the world origin. OverlapAABB has
-// no origin in 3D: the box is already world space.
+// hand-written in recording.c / recording_replay.c since they are variable length.
 B3_REC_OP( 0xE8, QueryOverlapAABB, RET_NONE, ARG( WORLDID, world ) ARG( AABB, aabb ) ARG( QUERYFILTER, filter ) )
 B3_REC_OP( 0xE9, QueryOverlapShape, RET_NONE,
 		   ARG( WORLDID, world ) ARG( POSITION, origin ) ARG( SHAPEPROXY, proxy ) ARG( QUERYFILTER, filter ) )
@@ -257,5 +280,5 @@ B3_REC_OP( 0xEF, QueryTag, RET_NONE, ARG( U64, key ) )
 
 B3_REC_OP( 0xF1, StateHash, RET_NONE, ARG( WORLDID, world ) ARG( U64, hash ) )
 
-// Accumulated world bounds over the whole recording, written once at stop. Informational.
+// Accumulated world bounds over the whole recording, written once at stop.
 B3_REC_OP( 0xF2, RecordingBounds, RET_NONE, ARG( AABB, bounds ) )

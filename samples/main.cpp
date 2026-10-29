@@ -1,9 +1,20 @@
 // SPDX-FileCopyrightText: 2025 Erin Catto
 // SPDX-License-Identifier: MIT
 
+#if defined( _MSC_VER )
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+#define _CRTDBG_MAP_ALLOC
+// stdlib before crtdbg so the malloc->_malloc_dbg remap lands after the real prototype
+#include <stdlib.h>
+#include <crtdbg.h>
+#endif
+
 #include "gfx/debug_adapter.h"
 #include "gfx/keycodes.h"
 #include "gfx/renderer.h"
+#include "gfx/text.h"
 #include "host/gui.h"
 #include "sample.h"
 #include "sokol_app.h"
@@ -17,6 +28,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <thread>
+
+#ifdef TRACY_ENABLE
+#include <tracy/Tracy.hpp>
+#else
+#define FrameMark
+#endif
 
 #if defined( _WIN32 )
 #define WIN32_LEAN_AND_MEAN
@@ -32,6 +49,7 @@ static SampleContext s_context;
 static int s_frame = 0;
 static int s_frameLimit = -1;
 static int s_sampleOverride = -1;
+static int s_exitCode = 0;
 
 static int CompareSamples( const void* a, const void* b )
 {
@@ -75,10 +93,13 @@ static void OnDrawUI( void )
 
 static void OnInit( void )
 {
+#ifdef TRACY_ENABLE
+	tracy::StartupProfiler();
+#endif
+
 #if defined( _WIN32 )
 	timeBeginPeriod( 1 );
 #endif
-
 	const sg_environment env = sglue_environment();
 	InitRenderer( &env );
 	InitUI( &env, OnDrawUI );
@@ -140,6 +161,17 @@ static void OnEvent( const sapp_event* e )
 		s_context.camera.OnEvent( e );
 	}
 
+	// Releases go to the key table even when the UI captures them. Otherwise Ctrl let go
+	// while the Ctrl+O picker is open stays down in the next sample.
+	if ( e->type == SAPP_EVENTTYPE_KEY_UP )
+	{
+		SetKeyDown( e->key_code, false );
+	}
+	else if ( e->type == SAPP_EVENTTYPE_UNFOCUSED )
+	{
+		ClearKeysDown();
+	}
+
 	if ( uiCaptured )
 	{
 		return;
@@ -160,11 +192,22 @@ static void OnEvent( const sapp_event* e )
 			{
 				switch ( e->key_code )
 				{
-					case KEY_TAB:
-						s_context.showUI = !s_context.showUI;
+					case SAPP_KEYCODE_TAB:
+						if ( mods & SAPP_MODIFIER_SHIFT )
+						{
+							bool hide = s_context.showUI || s_context.showText;
+							s_context.showUI = !hide;
+							s_context.showText = !hide;
+						}
+						else
+						{
+							// Plain Tab also restores text so it always leads back to the full view
+							s_context.showUI = !s_context.showUI;
+							s_context.showText = true;
+						}
 						break;
 
-					case KEY_ESCAPE:
+					case SAPP_KEYCODE_ESCAPE:
 						// Layered cancel. An open picker is an ImGui popup that
 						// already swallowed this. So peel the controls window, then
 						// the selection. Quit lives on Ctrl+Q now.
@@ -174,12 +217,15 @@ static void OnEvent( const sapp_event* e )
 						}
 						else
 						{
+							// The replay viewer redraws the highlight from its own selection every
+							// frame, so it has to clear that too
 							ClearSelection();
+							s_context.sample->Keyboard( e->key_code, ACTION_PRESS, mods );
 						}
 						break;
 
 					case KEY_Q:
-						if ( mods & MOD_CTRL )
+						if ( mods & SAPP_MODIFIER_CTRL )
 						{
 							sapp_request_quit();
 							break;
@@ -188,79 +234,60 @@ static void OnEvent( const sapp_event* e )
 						break;
 
 					case KEY_O:
-						if ( mods & MOD_CTRL )
+						if ( mods & SAPP_MODIFIER_CTRL )
 						{
 							// Ctrl+O opens the fuzzy picker. Force the UI visible so it shows.
 							s_context.showUI = true;
 							s_context.openSamplePicker = true;
+							break;
 						}
-						else
-						{
-							s_context.singleStep += ( mods & MOD_SHIFT ) ? 5 : 1;
-						}
+						s_context.sample->Keyboard( e->key_code, ACTION_PRESS, mods );
 						break;
 
-					case KEY_P:
-						// Pause stays on P. Space is not bound here on purpose. Global
-						// keys are dispatched before the sample sees them, so claiming
-						// Space would steal jump from the Mover sample.
+					// Step forward. Backward is , and only a sample that can rewind
+					// handles it, so that key falls through to the sample.
+					case KEY_PERIOD:
+						s_context.singleStep += ( mods & SAPP_MODIFIER_SHIFT ) ? 5 : 1;
+						break;
+
+					case SAPP_KEYCODE_P:
+					case SAPP_KEYCODE_PAUSE:
 						s_context.pause = !s_context.pause;
 						break;
 
-					case KEY_M:
+					case SAPP_KEYCODE_M:
 						s_context.showMetrics = !s_context.showMetrics;
 						break;
 
-					case KEY_R:
+					case SAPP_KEYCODE_I:
+						s_context.showProfile = !s_context.showProfile;
+						break;
+
+					case SAPP_KEYCODE_R:
 						SelectSample( &s_context, s_context.sampleIndex, true );
 						break;
 
-					case KEY_LEFT_BRACKET:
-						SelectSample( &s_context, b3MaxInt( 0, s_context.sampleIndex - 1 ), false );
+					case SAPP_KEYCODE_LEFT_BRACKET:
+						SelectSample( &s_context, ( s_context.sampleIndex + g_sampleCount - 1 ) % g_sampleCount, false );
 						break;
 
-					case KEY_RIGHT_BRACKET:
-						SelectSample( &s_context, b3MinInt( g_sampleCount - 1, s_context.sampleIndex + 1 ), false );
+					case SAPP_KEYCODE_RIGHT_BRACKET:
+						SelectSample( &s_context, ( s_context.sampleIndex + 1 ) % g_sampleCount, false );
 						break;
 
-					case KEY_F:
-					{
-						// Frame the selection, or let the sample frame its whole scene when nothing is
-						// selected. A non-body selection such as a recorded query supplies its own bounds and
-						// takes priority over the hovered body. The replay viewer's scene lives in a
-						// player-owned world, not the base world, so the whole-scene case routes through
-						// FocusHome.
-						Camera& cam = s_context.camera;
-						float aspect = cam.m_height > 0 ? (float)cam.m_width / (float)cam.m_height : 1.0f;
-						b3AABB bounds;
-						if ( s_context.sample->FocusBounds( &bounds ) )
-						{
-							cam.Frame( bounds, aspect, 1.5f );
-						}
-						else
-						{
-							b3BodyId bodyId = s_context.sample->FocusBody();
-							if ( B3_IS_NON_NULL( bodyId ) )
-							{
-								cam.Frame( b3Body_ComputeAABB( bodyId ), aspect, 1.5f );
-							}
-							else
-							{
-								s_context.sample->FocusHome();
-							}
-						}
-					}
-					break;
+					case SAPP_KEYCODE_F:
+						FrameSelection( &s_context );
+						break;
+
+					case SAPP_KEYCODE_HOME:
+						s_context.sample->FocusHome();
+						break;
 
 					default:
 						s_context.sample->Keyboard( e->key_code, ACTION_PRESS, mods );
 						break;
 				}
 			}
-			break;
-
-		case SAPP_EVENTTYPE_KEY_UP:
-			SetKeyDown( e->key_code, false );
 			break;
 
 		case SAPP_EVENTTYPE_CHAR:
@@ -309,12 +336,17 @@ static void OnEvent( const sapp_event* e )
 	}
 }
 
-// Pace the loop to 60 Hz so the fixed 1/60 physics step plays at real time on any
-// display. Sleep the bulk of the idle time, then spin the last bit since sleep wakes
-// are only accurate to about a millisecond.
+// This limits the render rate to the simulation rate. Physics debugging
+// ergonomics require render frames and simulation frames to be one to one.
+// I don't recommend this setup for games, where a decoupled render
+// and simulation rate is desirable.
 static void LimitFrameRate( uint64_t frameStart )
 {
-	const float targetMs = 1000.0f / 60.0f;
+	// By limiting to the simulation hertz, this allows me to run the simulation
+	// at 240Hz and render at that rate when using a 240Hz monitor. It also allows
+	// me to run a 10Hz simulation in at the wall clock rate.
+	float hertz = b3ClampFloat(s_context.hertz, 5.0f, 1000.0f);
+	const float targetMs = 1000.0f / hertz;
 	const float spinMs = 2.0f;
 
 	int sleepMs = (int)( targetMs - spinMs - b3GetMilliseconds( frameStart ) );
@@ -373,6 +405,7 @@ static void OnFrame( void )
 	// frame tracks load/unload without extra wiring. Live samples sit at 1 unit per
 	// meter, leaving the transform identity.
 	camera.SetRenderTransform( b3GetLengthUnitsPerMeter(), s_context.viewZUp );
+	camera.SetDrawDistance( s_context.drawDistance );
 
 	// Sync the draw origin to the camera eye once per frame, before any drawing. This must hold even
 	// for samples that drive their own Step without calling Sample::Step. Render re-syncs after Step
@@ -386,10 +419,17 @@ static void OnFrame( void )
 	// queues the HUD text; Render fills the instance and overlay arenas via the
 	// b3DebugDraw adapter and the sample's own Draw* calls.
 	SetTransparentDynamic( s_context.transparentDynamic );
+	SetTransparentKinematic( s_context.transparentKinematic );
 	s_context.sample->ResetText();
 
 	s_context.sample->Step();
 	s_context.sample->Render();
+
+	// Before RenderFrame so world labels drop too
+	if ( s_context.showText == false )
+	{
+		ResetTextArena();
+	}
 
 	FrameInput fi{};
 	fi.view = camera.View();
@@ -425,6 +465,9 @@ static void OnFrame( void )
 	sg_commit();
 	++s_frame;
 
+	// For the Tracy profiler
+	FrameMark;
+
 	if ( s_frameLimit < 0 )
 	{
 		LimitFrameRate( frameStart );
@@ -448,10 +491,35 @@ static void OnCleanup( void )
 	timeEndPeriod( 1 );
 #endif
 
-	exit( errors == 0 ? 0 : 1 );
+	#ifdef TRACY_ENABLE
+	tracy::ShutdownProfiler();
+#endif
+
+	// Return instead of exit so sokol frees its own window and context. main
+	// dumps CRT leaks once sapp_run returns, past that teardown.
+	s_exitCode = errors == 0 ? 0 : 1;
 }
 
-sapp_desc sokol_main( int argc, char** argv )
+static void OnAppLog( const char* tag, uint32_t logLevel, uint32_t logItemId, const char* message, uint32_t lineNumber,
+					  const char* filename, void* userData )
+{
+	(void)tag;
+	(void)logItemId;
+	(void)filename;
+	(void)userData;
+	(void)lineNumber;
+
+	const char* level = ( logLevel == 0 ) ? "panic" : ( logLevel == 1 ) ? "error" : ( logLevel == 2 ) ? "warn" : "info";
+	fprintf( stderr, "sokol(level %s) %s\n", level, message ? message : "(no message)" );
+
+	if ( logLevel == 0 )
+	{
+		fprintf( stderr, "Ensure you have OpenGL 4.5 if on Linux" );
+		exit( 1 );
+	}
+}
+
+static sapp_desc BuildAppDesc( int argc, char** argv )
 {
 	for ( int i = 1; i < argc; ++i )
 	{
@@ -463,6 +531,20 @@ sapp_desc sokol_main( int argc, char** argv )
 		{
 			s_sampleOverride = atoi( argv[++i] );
 		}
+		else if ( strcmp( argv[i], "--replay" ) == 0 && i + 1 < argc )
+		{
+			const char* path = argv[++i];
+
+			if ( g_replayIndex >= 0 )
+			{
+				snprintf( s_context.replayFile, sizeof( s_context.replayFile ), "%s", path );
+				s_sampleOverride = g_replayIndex;
+			}
+		}
+		else if ( strcmp( argv[i], "--zup" ) == 0 )
+		{
+			s_context.viewZUp = true;
+		}
 	}
 
 	sapp_desc desc{};
@@ -470,6 +552,7 @@ sapp_desc sokol_main( int argc, char** argv )
 	desc.frame_cb = OnFrame;
 	desc.event_cb = OnEvent;
 	desc.cleanup_cb = OnCleanup;
+	desc.logger.func = OnAppLog;
 
 	// GL 4.5 for glClipControl (reverse-Z). Ignored on D3D11 / Metal.
 	desc.gl.major_version = 4;
@@ -494,4 +577,20 @@ sapp_desc sokol_main( int argc, char** argv )
 	desc.high_dpi = true;
 
 	return desc;
+}
+
+// The leak dump runs at CRT exit, after static destructors. Libraries such as ImGuizmo keep
+// heap backed containers at file scope, and a dump right after sapp_run reports them.
+int main( int argc, char** argv )
+{
+#if defined( _MSC_VER )
+	_CrtSetReportMode( _CRT_WARN, _CRTDBG_MODE_DEBUG | _CRTDBG_MODE_FILE );
+	_CrtSetReportFile( _CRT_WARN, _CRTDBG_FILE_STDOUT );
+	_CrtSetDbgFlag( _CrtSetDbgFlag( _CRTDBG_REPORT_FLAG ) | _CRTDBG_LEAK_CHECK_DF );
+#endif
+
+	sapp_desc desc = BuildAppDesc( argc, argv );
+	sapp_run( &desc );
+
+	return s_exitCode;
 }

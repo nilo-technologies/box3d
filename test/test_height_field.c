@@ -143,7 +143,7 @@ static int RayCastFlatField( void )
 
 	b3HeightFieldData* hf = b3CreateHeightField( &def );
 
-	// Origin sits clearly inside triangle 0 of cell (1, 1) — off the cell
+	// Origin sits clearly inside triangle 0 of cell (1, 1). Off the cell
 	// diagonal x+z = 3. The translation overshoots the surface so the hit
 	// fraction is strictly less than maxFraction.
 	b3RayCastInput input = { 0 };
@@ -168,13 +168,13 @@ static int OverlapAtSurface( void )
 	b3Vec3 scale = { 1.0f, 1.0f, 1.0f };
 	b3HeightFieldData* hf = b3CreateGrid( 4, 4, scale, false );
 
-	// Sphere center 1.0 above the surface, radius 0.5 — clear gap.
+	// Sphere center 1.0 above the surface, radius 0.5. Clear gap.
 	b3Vec3 above = { 1.5f, 1.0f, 1.5f };
 	b3ShapeProxy proxyAbove = { &above, 1, 0.5f };
 	bool hitAbove = b3OverlapHeightField( hf, b3Transform_identity, &proxyAbove );
 	ENSURE( hitAbove == false );
 
-	// Sphere centered on the surface — radius pokes through.
+	// Sphere centered on the surface. Radius pokes through.
 	b3Vec3 through = { 1.5f, 0.0f, 1.5f };
 	b3ShapeProxy proxyThrough = { &through, 1, 0.5f };
 	bool hitThrough = b3OverlapHeightField( hf, b3Transform_identity, &proxyThrough );
@@ -431,7 +431,7 @@ static int ShapeCastBruteForce( void )
 // Brute-force ray cast: cast the ray against every (non-hole) triangle and keep
 // the closest hit. b3GetHeightFieldTriangle returns vertices in the same winding
 // order that b3ShapeCastHeightField feeds to b3IntersectRayTriangle, so this is a
-// pure traversal/culling check — the per-triangle math is identical.
+// pure traversal/culling check. The per-triangle math is identical.
 static b3CastOutput BruteForceRayCast( const b3HeightFieldData* hf, const b3RayCastInput* input )
 {
 	b3CastOutput best = { 0 };
@@ -526,6 +526,153 @@ static int RayCastBruteForce( void )
 	return 0;
 }
 
+// Flat 3x3 vertex field at y = 0, one cell material per entry. Caller destroys.
+static b3HeightFieldData* MakeFlatField( uint8_t* materials, bool clockwise )
+{
+	float heights[9] = { 0 };
+
+	b3HeightFieldDef def = { 0 };
+	def.heights = heights;
+	def.materialIndices = materials;
+	def.scale = (b3Vec3){ 1.0f, 1.0f, 1.0f };
+	def.countX = 3;
+	def.countZ = 3;
+	def.globalMinimumHeight = -1.0f;
+	def.globalMaximumHeight = 1.0f;
+	def.clockwiseWinding = clockwise;
+
+	return b3CreateHeightField( &def );
+}
+
+static int ShapeCastBackside( void )
+{
+	uint8_t materials[4] = { 1, 0, 0, 0 };
+	b3HeightFieldData* hf = MakeFlatField( materials, false );
+
+	// Falling onto the front (upper) face reports the hit, the triangle, and its material.
+	// The surface sits at y = 0, so a sphere of radius 0.2 stops with its center at y = 0.2.
+	b3Vec3 above = { 0.3f, 5.0f, 0.25f };
+	b3ShapeCastInput down = { 0 };
+	down.proxy = (b3ShapeProxy){ &above, 1, 0.2f };
+	down.translation = (b3Vec3){ 0.0f, -10.0f, 0.0f };
+	down.maxFraction = 1.0f;
+
+	b3CastOutput out = b3ShapeCastHeightField( hf, &down );
+	ENSURE( out.hit == true );
+	ENSURE_SMALL( out.fraction - 0.48f, 1e-2f );
+	ENSURE( out.normal.y > 0.99f );
+	ENSURE( out.triangleIndex == 0 || out.triangleIndex == 1 );
+	ENSURE( out.materialIndex == 1 );
+
+	// Rising from behind the face is culled
+	b3Vec3 below = { 0.3f, -5.0f, 0.25f };
+	b3ShapeCastInput up = { 0 };
+	up.proxy = (b3ShapeProxy){ &below, 1, 0.2f };
+	up.translation = (b3Vec3){ 0.0f, 10.0f, 0.0f };
+	up.maxFraction = 1.0f;
+
+	b3CastOutput missed = b3ShapeCastHeightField( hf, &up );
+	ENSURE( missed.hit == false );
+
+	b3DestroyHeightField( hf );
+	return 0;
+}
+
+// A clockwise height field faces down, see HeightFieldWinding. Shape cast backside
+// culling must respect the flag: a rising sphere hits from below, not from above.
+static int ShapeCastClockwiseWinding( void )
+{
+	uint8_t materials[4] = { 1, 0, 0, 0 };
+	b3HeightFieldData* hf = MakeFlatField( materials, true );
+
+	b3Vec3 below = { 0.3f, -5.0f, 0.25f };
+	b3ShapeCastInput up = { 0 };
+	up.proxy = (b3ShapeProxy){ &below, 1, 0.2f };
+	up.translation = (b3Vec3){ 0.0f, 10.0f, 0.0f };
+	up.maxFraction = 1.0f;
+
+	b3CastOutput out = b3ShapeCastHeightField( hf, &up );
+	ENSURE( out.hit == true );
+	ENSURE_SMALL( out.fraction - 0.48f, 1e-2f );
+	ENSURE( out.normal.y < -0.99f );
+	ENSURE( out.triangleIndex == 0 || out.triangleIndex == 1 );
+	ENSURE( out.materialIndex == 1 );
+
+	b3Vec3 above = { 0.3f, 5.0f, 0.25f };
+	b3ShapeCastInput down = { 0 };
+	down.proxy = (b3ShapeProxy){ &above, 1, 0.2f };
+	down.translation = (b3Vec3){ 0.0f, -10.0f, 0.0f };
+	down.maxFraction = 1.0f;
+
+	b3CastOutput missed = b3ShapeCastHeightField( hf, &down );
+	ENSURE( missed.hit == false );
+
+	b3DestroyHeightField( hf );
+	return 0;
+}
+
+// Ray casts run through the shape cast. The default winding faces up, so a ray from below is the
+// back side and gets culled.
+static int RayCastBackside( void )
+{
+	uint8_t materials[4] = { 1, 0, 0, 0 };
+	b3HeightFieldData* hf = MakeFlatField( materials, false );
+
+	b3RayCastInput down = { 0 };
+	down.origin = (b3Vec3){ 0.3f, 5.0f, 0.25f };
+	down.translation = (b3Vec3){ 0.0f, -10.0f, 0.0f };
+	down.maxFraction = 1.0f;
+
+	b3CastOutput out = b3RayCastHeightField( hf, &down );
+	ENSURE( out.hit == true );
+	ENSURE_SMALL( out.fraction - 0.5f, 1e-3f );
+	ENSURE( out.normal.y > 0.99f );
+	ENSURE( out.triangleIndex == 0 || out.triangleIndex == 1 );
+	ENSURE( out.materialIndex == 1 );
+
+	b3RayCastInput up = { 0 };
+	up.origin = (b3Vec3){ 0.3f, -5.0f, 0.25f };
+	up.translation = (b3Vec3){ 0.0f, 10.0f, 0.0f };
+	up.maxFraction = 1.0f;
+
+	b3CastOutput missed = b3RayCastHeightField( hf, &up );
+	ENSURE( missed.hit == false );
+
+	b3DestroyHeightField( hf );
+	return 0;
+}
+
+// A clockwise field faces down. The winding swap already flips the triangle, so the ray normal
+// must not be flipped a second time.
+static int RayCastClockwiseWinding( void )
+{
+	uint8_t materials[4] = { 1, 0, 0, 0 };
+	b3HeightFieldData* hf = MakeFlatField( materials, true );
+
+	b3RayCastInput up = { 0 };
+	up.origin = (b3Vec3){ 0.3f, -5.0f, 0.25f };
+	up.translation = (b3Vec3){ 0.0f, 10.0f, 0.0f };
+	up.maxFraction = 1.0f;
+
+	b3CastOutput out = b3RayCastHeightField( hf, &up );
+	ENSURE( out.hit == true );
+	ENSURE_SMALL( out.fraction - 0.5f, 1e-3f );
+	ENSURE( out.normal.y < -0.99f );
+	ENSURE( out.triangleIndex == 0 || out.triangleIndex == 1 );
+	ENSURE( out.materialIndex == 1 );
+
+	b3RayCastInput down = { 0 };
+	down.origin = (b3Vec3){ 0.3f, 5.0f, 0.25f };
+	down.translation = (b3Vec3){ 0.0f, -10.0f, 0.0f };
+	down.maxFraction = 1.0f;
+
+	b3CastOutput missed = b3RayCastHeightField( hf, &down );
+	ENSURE( missed.hit == false );
+
+	b3DestroyHeightField( hf );
+	return 0;
+}
+
 int HeightFieldTest( void )
 {
 	RUN_SUBTEST( HeightFieldCreate );
@@ -537,6 +684,10 @@ int HeightFieldTest( void )
 	RUN_SUBTEST( ShapeCastVerticalStraddle );
 	RUN_SUBTEST( ShapeCastBruteForce );
 	RUN_SUBTEST( RayCastBruteForce );
+	RUN_SUBTEST( ShapeCastBackside );
+	RUN_SUBTEST( ShapeCastClockwiseWinding );
+	RUN_SUBTEST( RayCastBackside );
+	RUN_SUBTEST( RayCastClockwiseWinding );
 
 	return 0;
 }

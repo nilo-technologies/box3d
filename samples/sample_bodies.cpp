@@ -334,26 +334,355 @@ public:
 		bodyDef.type = b3_dynamicBody;
 		bodyDef.position = { 0.0f, 2.0f, 0.0f };
 		bodyDef.rotation = b3MakeQuatFromAxisAngle( b3Vec3_axisX, -0.5f * B3_PI );
-		bodyDef.angularVelocity = { 0.01f, 0.01f, 10.0f };
 		bodyDef.gravityScale = 0.0f;
-		b3BodyId bodyId = b3CreateBody( m_worldId, &bodyDef );
+		m_bodyId = b3CreateBody( m_worldId, &bodyDef );
 
 		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.updateBodyMass = false;
 		b3HullData* cylinder = b3CreateCylinder( 0.6f, 0.15f, 0.0f, 32 );
 		b3BoxHull box = b3MakeBoxHull( 1.0f, 0.05f, 0.1f );
-		b3CreateHullShape( bodyId, &shapeDef, cylinder );
-		b3CreateHullShape( bodyId, &shapeDef, &box.base );
+		b3CreateHullShape( m_bodyId, &shapeDef, cylinder );
+		b3CreateHullShape( m_bodyId, &shapeDef, &box.base );
+		b3Body_ApplyMassFromShapes( m_bodyId );
+
+		// Set the angular velocity after creating the shapes and the local center of mass is fixed.
+		b3Body_SetAngularVelocity( m_bodyId, { 0.01f, 0.01f, 10.0f } );
 
 		b3DestroyHull( cylinder );
+	}
+
+	void Step() override
+	{
+		Sample::Step();
+
+		b3Pos c = b3Body_GetWorldCenter( m_bodyId );
+		DrawTextLine( "center %.3g %.3g %.3g", c.x, c.y, c.z );
 	}
 
 	static Sample* Create( SampleContext* sampleContext )
 	{
 		return new GyroscopicTorque( sampleContext );
 	}
+
+	b3BodyId m_bodyId;
 };
 
 static int sampleGyroscopicTorque = RegisterSample( "Bodies", "Gyroscopic Torque", GyroscopicTorque::Create );
+
+// Spinning tops. Ported from PEEL.
+// Each top is tilted and spun about its symmetry axis. Gravity torque about the tip is what makes
+// them precess instead of toppling. The first top carries a diagnostic that compares the measured
+// precession rate against the classical heavy top solution.
+class GyroscopicPrecession : public Sample
+{
+public:
+	explicit GyroscopicPrecession( SampleContext* context )
+		: Sample( context )
+	{
+		if ( context->restart == false )
+		{
+			m_camera->SetView( 40.0f, 30.0f, 75.0f, { 0.0f, 2.0f, 0.0f } );
+		}
+
+		AddGroundBox( 40.0f );
+
+		// Top shape: a wide n-gon rim up top and a point at the origin, so it balances on its tip.
+		constexpr int numSegs = 7;
+		constexpr float r = 2.0f;
+		constexpr float h = 2.0f;
+		b3Vec3 hullPoints[numSegs + 1];
+		const float dphi = 2.0f * B3_PI / numSegs;
+		for ( int i = 0; i < numSegs; ++i )
+		{
+			hullPoints[i] = { r * cosf( i * dphi ), h, r * sinf( i * dphi ) };
+		}
+		hullPoints[numSegs] = b3Vec3_zero;
+		b3HullData* hull = b3CreateHull( hullPoints, numSegs + 1, numSegs + 1 );
+
+		// Capsule for testing alternate shapes. Keep this.
+		//b3Capsule capsule = {{0.0f, -0.6f, 0.0f}, {0.0f, 0.6f, 0.0f }, 0.4f};
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.baseMaterial.rollingResistance = 0.1f;
+
+		// Tilt the top, then spin it about its own symmetry axis. Gravity does the rest.
+		b3Quat rotation = b3MakeQuatFromAxisAngle( b3Vec3_axisZ, 15.0f * B3_PI / 180.0f );
+		b3Vec3 angularVelocity = b3RotateVector( rotation, { 0.0f, 75.0f, 0.0f } );
+
+		constexpr int count = 8;
+		constexpr float separation = 6.0f;
+		for ( int x = 0; x < count; ++x )
+		{
+			for ( int z = 0; z < count; ++z )
+			{
+				b3BodyDef bodyDef = b3DefaultBodyDef();
+				bodyDef.type = b3_dynamicBody;
+				bodyDef.position = { ( x - count / 2 ) * separation, h, ( z - count / 2 ) * separation };
+				bodyDef.rotation = rotation;
+
+				// The spin rate exceeds the default cap, so bypass it as the test intends.
+				bodyDef.allowFastRotation = true;
+
+				b3BodyId bodyId = b3CreateBody( m_worldId, &bodyDef );
+				b3CreateHullShape( bodyId, &shapeDef, hull );
+
+				//b3CreateCapsuleShape( bodyId, &shapeDef, &capsule );
+
+				b3Body_SetAngularVelocity( bodyId, angularVelocity );
+
+				if ( x == 0 && z == 0 )
+				{
+					m_topId = bodyId;
+				}
+			}
+		}
+
+		b3DestroyHull( hull );
+
+		// Mass properties of the measured top. The tip sits at the body origin, so the pivot distance is
+		// just the height of the center of mass, and the symmetry axis is the local up axis.
+		b3MassData massData = b3Body_GetMassData( m_topId );
+		m_mass = massData.mass;
+		m_pivotDistance = massData.center.y;
+		m_spinInertia = massData.inertia.cy.y;
+
+		// Transverse inertia belongs about the pivot, not the center of mass
+		float transverse = 0.5f * ( massData.inertia.cx.x + massData.inertia.cz.z );
+		m_transverseInertia = transverse + m_mass * m_pivotDistance * m_pivotDistance;
+
+		m_gravity = b3Length( b3World_GetGravity( m_worldId ) );
+
+		m_azimuth = 0.0f;
+		m_actualAngle = 0.0f;
+		m_expectedAngle = 0.0f;
+		m_elapsed = 0.0f;
+		m_groundTime = 0.0f;
+		m_rate = 0.0f;
+		m_measuring = false;
+	}
+
+	// Steady precession rate of a heavy symmetric top about the vertical. The slow root of
+	// I1 * W^2 * cos(tilt) - I3 * spin * W + M * g * d = 0. Goldstein 5.7.
+	// Collapses to torque over spin momentum for a fast top.
+	float ExpectedRate( float spin, float cosTilt ) const
+	{
+		float momentum = m_spinInertia * spin;
+		float torque = m_mass * m_gravity * m_pivotDistance;
+		if ( momentum <= FLT_EPSILON )
+		{
+			return 0.0f;
+		}
+
+		float a = m_transverseInertia * cosTilt;
+		float discriminant = momentum * momentum - 4.0f * a * torque;
+		if ( a <= FLT_EPSILON || discriminant < 0.0f )
+		{
+			// Axis at or past horizontal, or spinning too slowly to precess steadily
+			return torque / momentum;
+		}
+
+		return ( momentum - sqrtf( discriminant ) ) / ( 2.0f * a );
+	}
+
+	void Step() override
+	{
+		Sample::Step();
+
+		bool isAwake = b3Body_IsAwake( m_topId );
+		if ( isAwake == false )
+		{
+			DrawTextLine( "top is sleeping" );
+			return;
+		}
+
+		b3Pos tip = b3Body_GetPosition( m_topId );
+		b3Quat quat = b3Body_GetRotation( m_topId );
+		b3Vec3 axis = b3RotateVector( quat, b3Vec3_axisY );
+		b3Vec3 omega = b3Body_GetAngularVelocity( m_topId );
+		float spin = b3Dot( omega, axis );
+		float cosTilt = b3ClampFloat( axis.y, -1.0f, 1.0f );
+		float expected = ExpectedRate( spin, cosTilt );
+
+		if ( m_didStep )
+		{
+			float timeStep = 1.0f / m_context->hertz;
+
+			// Gravity exerts no torque about the center of mass while the top is airborne, so the pivot
+			// solution only applies once the tip lands. Give the landing impulse time to wash out too,
+			// otherwise it biases the average for the rest of the run.
+			if ( tip.y < 0.05f )
+			{
+				m_groundTime += timeStep;
+			}
+
+			if ( m_measuring == false )
+			{
+				if ( m_groundTime > 0.5f )
+				{
+					m_measuring = true;
+					m_azimuth = b3Atan2( -axis.z, axis.x );
+				}
+			}
+			else
+			{
+				// Right handed angle of the symmetry axis about the world up axis
+				float azimuth = b3Atan2( -axis.z, axis.x );
+				float delta = b3UnwindAngle( azimuth - m_azimuth );
+				m_azimuth = azimuth;
+
+				m_actualAngle += delta;
+				m_expectedAngle += expected * timeStep;
+				m_elapsed += timeStep;
+
+				// Nutation swings the instantaneous rate between zero and twice the mean, so filter it
+				// with a one second time constant.
+				float alpha = timeStep / ( timeStep + 1.0f );
+				m_rate += alpha * ( delta / timeStep - m_rate );
+			}
+		}
+
+		DrawLine( tip, b3OffsetPos( tip, 5.0f * axis ), MakeColor( b3_colorYellow ) );
+
+		DrawTextLine( "spin %.1f rad/s, tilt %.1f deg", spin, ( 180.0f / B3_PI ) * acosf( cosTilt ) );
+		DrawTextLine( "precession: expected %.4f rad/s, actual %.4f rad/s", expected, m_rate );
+
+		if ( m_elapsed > 0.0f )
+		{
+			// Average both sides over the same window. The spin decays, so the expected rate drifts with it.
+			float expectedAverage = m_expectedAngle / m_elapsed;
+			float actualAverage = m_actualAngle / m_elapsed;
+			float error = expectedAverage != 0.0f ? 100.0f * ( actualAverage - expectedAverage ) / expectedAverage : 0.0f;
+			DrawTextLine( "%.1f s average: expected %.4f, actual %.4f, error %+.1f%%", m_elapsed, expectedAverage, actualAverage,
+						  error );
+		}
+		else
+		{
+			DrawTextLine( "waiting for the tip to land" );
+		}
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new GyroscopicPrecession( context );
+	}
+
+	b3BodyId m_topId;
+	float m_mass;
+	float m_gravity;
+	float m_pivotDistance;
+	float m_spinInertia;
+	float m_transverseInertia;
+	float m_azimuth;
+	float m_actualAngle;
+	float m_expectedAngle;
+	float m_elapsed;
+	float m_groundTime;
+	float m_rate;
+	bool m_measuring;
+};
+
+static int sampleGyroscopicPrecession = RegisterSample( "Bodies", "Gyroscopic Precession", GyroscopicPrecession::Create );
+
+// This show that gyroscopic torque is necessary for plausible behavior on long skinny objects.
+class SpinningCapsule : public Sample
+{
+public:
+	explicit SpinningCapsule( SampleContext* context )
+		: Sample( context )
+	{
+		if ( context->restart == false )
+		{
+			m_camera->SetView( 30.0f, 25.0f, 15.0f, { 0.0f, 1.0f, 0.0f } );
+		}
+
+		m_length = 4.0f;
+		m_tolerance = b3World_GetIsotropicInertiaTolerance( m_worldId );
+		CreateScene();
+	}
+
+	void CreateScene()
+	{
+		// The tolerance only applies to bodies created after it is set
+		b3Capacity capacity = {};
+		CreateWorld( &capacity );
+		b3World_SetIsotropicInertiaTolerance( m_worldId, m_tolerance );
+
+		AddGroundBox( 20.0f );
+
+		float radius = 0.2f;
+		float halfLength = 0.5f * m_length;
+		b3Capsule capsule = { { 0.0f, -halfLength, 0.0f }, { 0.0f, halfLength, 0.0f }, radius };
+
+		// Stand on the lower cap, tilted about it
+		b3Quat rotation = b3MakeQuatFromAxisAngle( b3Vec3_axisZ, 15.0f * B3_PI / 180.0f );
+		b3Vec3 axis = b3RotateVector( rotation, b3Vec3_axisY );
+
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.type = b3_dynamicBody;
+		bodyDef.position = b3OffsetPos( { 0.0f, radius, 0.0f }, halfLength * axis );
+		bodyDef.rotation = rotation;
+		bodyDef.angularVelocity = 20.0f * axis;
+		m_capsuleId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		b3CreateCapsuleShape( m_capsuleId, &shapeDef, &capsule );
+	}
+
+	bool DrawControls() override
+	{
+		bool changed = false;
+
+		ImGui::PushItemWidth( 10.0f * ImGui::GetFontSize() );
+		changed |= ImGui::SliderFloat( "Length", &m_length, 0.0f, 8.0f, "%.1f" );
+		changed |= ImGui::SliderFloat( "Tolerance", &m_tolerance, 0.0f, 1.0f, "%.3f" );
+		ImGui::PopItemWidth();
+
+		if ( ImGui::Button( "Reset" ) || changed )
+		{
+			CreateScene();
+		}
+
+		return true;
+	}
+
+	void Step() override
+	{
+		Sample::Step();
+
+		// Same measure the world uses to skip the gyroscopic solve: the deviatoric part of the inertia
+		// relative to its mean.
+		b3Matrix3 inertia = b3Body_GetLocalRotationalInertia( m_capsuleId );
+		float mean = ( inertia.cx.x + inertia.cy.y + inertia.cz.z ) / 3.0f;
+		float dx = inertia.cx.x - mean;
+		float dy = inertia.cy.y - mean;
+		float dz = inertia.cz.z - mean;
+		float offDiagonal = inertia.cy.x * inertia.cy.x + inertia.cz.x * inertia.cz.x + inertia.cz.y * inertia.cz.y;
+		float deviation = dx * dx + dy * dy + dz * dz + 2.0f * offDiagonal;
+		float anisotropy = mean > 0.0f ? sqrtf( 2.0f * deviation / 3.0f ) / mean : 0.0f;
+		bool isGyroscopic = anisotropy > m_tolerance;
+
+		b3Pos center = b3Body_GetWorldCenter( m_capsuleId );
+		b3Vec3 axis = b3RotateVector( b3Body_GetRotation( m_capsuleId ), b3Vec3_axisY );
+		b3Vec3 omega = b3Body_GetAngularVelocity( m_capsuleId );
+		float tilt = acosf( b3ClampFloat( b3AbsFloat( axis.y ), 0.0f, 1.0f ) );
+
+		DrawLine( center, b3OffsetPos( center, 0.2f * omega ), MakeColor( b3_colorYellow ) );
+
+		DrawTextLine( "anisotropy %.2f, gyroscopic torque %s", anisotropy, isGyroscopic ? "on" : "off" );
+		DrawTextLine( "tilt %.0f deg, spin %.1f rad/s", ( 180.0f / B3_PI ) * tilt, b3Dot( omega, axis ) );
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new SpinningCapsule( context );
+	}
+
+	b3BodyId m_capsuleId;
+	float m_length;
+	float m_tolerance;
+};
+
+static int sampleSpinningCapsule = RegisterSample( "Bodies", "Spinning Capsule", SpinningCapsule::Create );
 
 class Weeble : public Sample
 {
@@ -631,7 +960,7 @@ public:
 		{
 			PickRay pickRay = m_camera->BuildPickRay( p.x, p.y );
 			b3Pos origin = pickRay.origin + 10.0f * b3Normalize( pickRay.translation );
-			m_transform.p = m_baseTranslation + b3SubPos(origin, m_origin);
+			m_transform.p = m_baseTranslation + b3SubPos( origin, m_origin );
 		}
 	}
 
@@ -958,3 +1287,150 @@ public:
 };
 
 static int sampleFixedRotation = RegisterSample( "Bodies", "Fixed Rotation", FixedRotation::Create );
+
+// A spinning class ring flips its heavy gem from bottom to top, like this video:
+// https://www.youtube.com/watch?v=_up0BiLCliA
+// This is a fiddley test and requires careful tuning.
+class ClassRing : public Sample
+{
+public:
+	explicit ClassRing( SampleContext* context )
+		: Sample( context )
+	{
+		if ( context->restart == false )
+		{
+			m_camera->SetView( 40.0f, 30.0f, 15.0f, { 0.0f, 2.0f, 0.0f } );
+		}
+
+		AddGroundBox( 100.0f );
+
+		constexpr int n = 24;
+		constexpr float r = 1.0f;
+		constexpr float tubeRadius = 0.1f * r;
+		constexpr float axisRadius = r - tubeRadius;
+
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.type = b3_dynamicBody;
+		bodyDef.position = { 0.0f, r, 0.0f };
+		bodyDef.rotation = b3MakeQuatFromAxisAngle( b3Vec3_axisX, 13.0f * B3_PI / 180.0f );
+		bodyDef.allowFastRotation = true;
+		bodyDef.enableContactRecycling = false;
+		b3BodyId bodyId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		shapeDef.density = 1.0f;
+
+		// Band built from a loop of capsules.
+		b3Vec3 vertices[n];
+		float deltaAngle = 2.0f * B3_PI / n;
+		b3CosSin cs = b3ComputeCosSin( deltaAngle );
+		float x = axisRadius, y = 0.0f;
+		for ( int i = 0; i < n; ++i )
+		{
+			vertices[i] = { x, y, 0.0f };
+			float x2 = cs.cosine * x - cs.sine * y;
+			float y2 = cs.sine * x + cs.cosine * y;
+			x = x2;
+			y = y2;
+		}
+
+		for ( int i = 0; i < n; ++i )
+		{
+			b3Capsule capsule = { vertices[i], vertices[( i + 1 ) % n], tubeRadius };
+			b3CreateCapsuleShape( bodyId, &shapeDef, &capsule );
+		}
+
+		// Heavy gem provides the mass asymmetry that drives the inversion
+		shapeDef.density = 2.0f;
+		b3Sphere sphere = { .center = { 0.0f, -0.65f * r, 0.0f }, .radius = 0.3f };
+		b3CreateSphereShape( bodyId, &shapeDef, &sphere );
+
+		b3Vec3 angularVelocity = b3RotateVector( bodyDef.rotation, { 0.0f, 100.0f, 0.0f } );
+		b3Body_SetAngularVelocity( bodyId, angularVelocity );
+
+		m_ringId = bodyId;
+	}
+
+	void Step() override
+	{
+		// This needs a high simulation rate so that contact points keep up with the high speed rotation.
+		float hertz = m_context->hertz;
+		int subStepCount = m_context->subStepCount;
+
+		// 960Hz simulation
+		int multiplier = 16;
+		m_context->hertz = multiplier * 60.0f;
+		m_context->subStepCount = 8;
+
+		// Multiple hidden steps to keep the render real-time.
+		for ( int i = 0; i < multiplier - 1; ++i )
+		{
+			b3World_Step( m_worldId, 1.0f / m_context->hertz, m_context->subStepCount );
+		}
+
+		Sample::Step();
+
+		m_context->hertz = hertz;
+		m_context->subStepCount = subStepCount;
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new ClassRing( context );
+	}
+
+	b3BodyId m_ringId;
+};
+
+static int sampleClassRing = RegisterSample( "Bodies", "Class Ring", ClassRing::Create );
+
+/*
+mandude — 9:34 AM
+I've run into a minor, and admittedly pretty niche, issue with kinematic bodies. Because box3d will skip mass computations on
+kinematic bodies, the center of mass is never set. This means if the origin of a shape attached to the body isn't in the center of
+the shape, and you add an angular velocity, the shape will rotate about whatever the shape's origin is. For a simple example, if
+you have a cube as a mesh, with opposing corners at (0, 0, 0) and (1, 1, 1), rotation will happen about the corner of the cube.
+It's possible to work around this by calling setMassData with zero mass, a custom center of mass, and an identity matrix for the
+inertia tensor. That function tries to preserve momentum, so it can have unexpected effects on the velocity if the body is already
+moving, so perhaps it would be useful to have a more direct way to specify a custom offset for the origin of a kinematic body?
+ */
+class OffsetKinematic : public Sample
+{
+public:
+	explicit OffsetKinematic( SampleContext* context )
+		: Sample( context )
+	{
+		if ( m_context->restart == false )
+		{
+			m_camera->SetView( 0.0f, 30.0f, 10.0f, { 0.0f, 1.5f, 0.0f } );
+		}
+
+		AddGroundBox( 20.0f );
+
+		{
+			b3BodyDef bodyDef = b3DefaultBodyDef();
+			bodyDef.name = "kinematic";
+			bodyDef.type = b3_kinematicBody;
+			bodyDef.position.y = 3.0;
+			b3BodyId bodyId = b3CreateBody( m_worldId, &bodyDef );
+			b3Vec3 offset = { 0.5f, 0.5f, 1.0f };
+			b3BoxHull box = b3MakeTransformedBoxHull( 0.5f, 0.5f, 1.0f, { .p = offset, .q = b3Quat_identity} );
+			b3ShapeDef shapeDef = b3DefaultShapeDef();
+			b3CreateHullShape( bodyId, &shapeDef, &box.base );
+
+			b3MassData massData = b3Body_GetMassData( bodyId );
+			massData.center = offset;
+			b3Body_SetMassData( bodyId, massData );
+
+			b3Vec3 angularVelocity = {1.0f, -1.0f, 2.0f};
+			b3Body_SetAngularVelocity( bodyId, angularVelocity );
+		}
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new OffsetKinematic( context );
+	}
+};
+
+static int sampleOffsetKinematic = RegisterSample( "Bodies", "Offset Kinematic", OffsetKinematic::Create );

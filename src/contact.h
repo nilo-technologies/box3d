@@ -65,8 +65,11 @@ enum b3ContactFlags
 	// This is a mesh contact
 	b3_simMeshContact = 0x00400000,
 
-
+	// Relative transform is cached for contact recycling
 	b3_relativeTransformValid = 0x00800000,
+
+	// Enable speculative contact points
+	b3_enableSpeculativePoints = 0x01000000,
 };
 
 // A contact edge is used to connect bodies and contacts together
@@ -123,13 +126,14 @@ typedef struct b3Contact
 	// Back index into b3World::contacts
 	int contactId;
 
-	// These are transient and cached for improved performance. B3_NULL_INDEX for static bodies.
-	int bodySimIndexA;
-	int bodySimIndexB;
+	// Encoded body sim indices to avoid a cache miss accessing the body in the narrow phase.
+	int encodedBodySimA;
+	int encodedBodySimB;
 
 	// b3ContactFlags
 	uint32_t flags;
 
+	// todo embed single manifold with ability to allocate overfloat, use union.
 	b3Manifold* manifolds;
 	int manifoldCount;
 
@@ -176,5 +180,6 @@ void b3DestroyContact( b3World* world, b3Contact* contact, bool wakeBodies );
 bool b3UpdateContact( b3World* world, int workerIndex, b3Contact* contact, b3Shape* shapeA, b3Vec3 localCenterA, b3WorldTransform xfA,
 					  b3Shape* shapeB, b3Vec3 localCenterB, b3WorldTransform xfB, bool isFast, b3Arena arena );
 
-bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact, const b3Shape* shapeA, const int* materialMap,
-							 b3WorldTransform xfA, const b3Shape* shapeB, b3WorldTransform xfB, bool isFast, b3Arena arena );
+bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact, const b3Shape* shapeA,
+							 const uint16_t* materialMap, b3WorldTransform xfA, const b3Shape* shapeB, b3WorldTransform xfB,
+							 bool isFast, b3Arena arena );

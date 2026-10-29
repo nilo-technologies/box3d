@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: 2025 Erin Catto
 // SPDX-License-Identifier: MIT
 
+#include "gfx/debug_adapter.h"
+#include "gfx/draw.h"
 #include "imgui.h"
 #include "sample.h"
-#include "gfx/draw.h"
-#include "stability.h"
 #include "utils.h"
-
-#include "gfx/debug_adapter.h"
 
 #include "box3d/box3d.h"
 
@@ -443,7 +441,7 @@ public:
 		m_runCount = 0;
 		m_failure = false;
 		m_autoGenerate = false;
-
+		m_collide = true;
 		m_stepWhilePaused = true;
 
 		Generate();
@@ -550,13 +548,16 @@ public:
 
 		// Don't allow shapes to collide with each other. This
 		// makes isolating failures easier.
-		shapeDef.filter.categoryBits = 2;
-		shapeDef.filter.maskBits = 1;
+		if ( m_collide == false )
+		{
+			shapeDef.filter.categoryBits = 2;
+			shapeDef.filter.maskBits = 1;
+		}
 
 		g_randomSeed = (uint32_t)b3GetTicks();
 
 		bool simulateAll = true;
-		// g_randomSeed = 3963634789;
+		// g_randomSeed = 1910133196;
 
 		m_runCount += 1;
 		m_stepCount = 0;
@@ -569,7 +570,7 @@ public:
 				b3Vec3 linearVelocity = RandomVec3Uniform( -1.0f, 1.0f );
 				b3Vec3 angularVelocity = RandomVec3Uniform( -5.0f, 5.0f );
 
-				if ( simulateAll || ( i == 5 && j == 4 ) )
+				if ( simulateAll || ( i == 19 && j == 20 ) )
 				{
 					bodyDef.position = { 0.5f * ( i - 0.5f * m_gridCount ), 5.0f, 0.5f * ( j - 0.5f * m_gridCount ) };
 					bodyDef.linearVelocity = linearVelocity;
@@ -625,6 +626,11 @@ public:
 			Generate();
 		}
 
+		if ( ImGui::Checkbox( "Collide", &m_collide ) )
+		{
+			Generate();
+		}
+
 		if ( ImGui::Button( "Generate" ) )
 		{
 			Generate();
@@ -646,8 +652,7 @@ public:
 		{
 			PickRay pickRay = m_camera->BuildPickRay( m_context->mouseX, m_context->mouseY );
 
-			b3RayResult result =
-				b3World_CastRayClosest( m_worldId, pickRay.origin, pickRay.translation, b3DefaultQueryFilter() );
+			b3RayResult result = b3World_CastRayClosest( m_worldId, pickRay.origin, pickRay.translation, b3DefaultQueryFilter() );
 
 			if ( result.hit )
 			{
@@ -666,7 +671,7 @@ public:
 				continue;
 			}
 
-			b3Pos massCenter = b3Body_GetWorldCenterOfMass( bodyId );
+			b3Pos massCenter = b3Body_GetWorldCenter( bodyId );
 			if ( massCenter.y < -2.0f )
 			{
 				IndexPair pair = ConvertToPair( b3Body_GetUserData( bodyId ) );
@@ -737,63 +742,10 @@ public:
 	int m_runCount;
 	bool m_failure;
 	bool m_autoGenerate;
+	bool m_collide;
 };
 
 static int sampleMeshDrop = RegisterSample( "Continuous", "Mesh Drop", MeshDrop::Create );
-
-class MeshDropUnitTest : public Sample
-{
-public:
-	explicit MeshDropUnitTest( SampleContext* context )
-		: Sample( context )
-	{
-		if ( context->restart == false )
-		{
-			m_camera->SetView( 0.0f, 30.0f, 20.0f, b3Pos_zero );
-			GetGuiDraw()->forceScale = 0.1f;
-		}
-
-		m_data = CreateMeshDrop( m_worldId, b3Pos_zero );
-		m_failed = false;
-	}
-
-	~MeshDropUnitTest() override
-	{
-		DestroyMeshDrop( &m_data );
-	}
-
-	void Step() override
-	{
-		Sample::Step();
-
-		if ( m_failed == false )
-		{
-			if ( m_stepCount >= 300 )
-			{
-				b3BodyEvents bodyEvents = b3World_GetBodyEvents( m_worldId );
-				if ( bodyEvents.moveCount > 0 )
-				{
-					m_failed = true;
-				}
-			}
-		}
-
-		if ( m_failed == true )
-		{
-			DrawTextLine( "failed!" );
-		}
-	}
-
-	static Sample* Create( SampleContext* context )
-	{
-		return new MeshDropUnitTest( context );
-	}
-
-	MeshDropData m_data;
-	bool m_failed;
-};
-
-static int sampleMeshDropUnitTest = RegisterSample( "Continuous", "Mesh Drop Unit Test", MeshDropUnitTest::Create );
 
 // This sample shows that clustering based on the manifold normal can lead to clipping and/or tunneling.
 class HumpMesh : public Sample
@@ -917,13 +869,12 @@ public:
 		if ( context->restart == false )
 		{
 			m_camera->SetView( 0.0f, 15.0f, 50.0f, { 0.0f, 15.0f, 0.0f } );
-			
 		}
 
 		AddGroundBox( 40.0f );
 
 		b3BoxHull box = b3MakeBoxHull( 0.5f, 10.0f, 0.5f );
-		b3Capsule capsule = {{0.0f, -9.5f, 0.0f}, {0.0f, 9.5f, 0.0f}, 0.5f};
+		b3Capsule capsule = { { 0.0f, -9.5f, 0.0f }, { 0.0f, 9.5f, 0.0f }, 0.5f };
 
 		bool useCapsule = false;
 
@@ -936,7 +887,7 @@ public:
 			b3BodyId bodyId = b3CreateBody( m_worldId, &bodyDef );
 
 			b3ShapeDef shapeDef = b3DefaultShapeDef();
-			if (useCapsule)
+			if ( useCapsule )
 			{
 				b3CreateCapsuleShape( bodyId, &shapeDef, &capsule );
 			}
@@ -1018,11 +969,6 @@ public:
 			b3CreateMeshShape( bodyId, &shapeDef, m_mesh, b3Vec3_one );
 		}
 
-		m_savedThreshold = b3GetStallThreshold();
-
-		// Log any CCD that takes longer than 1 ms.
-		b3SetStallThreshold( 0.001f );
-
 		Launch();
 	}
 
@@ -1062,7 +1008,6 @@ public:
 	~Stall() override
 	{
 		b3DestroyMesh( m_mesh );
-		b3SetStallThreshold( m_savedThreshold );
 	}
 
 	static Sample* Create( SampleContext* context )
@@ -1072,7 +1017,121 @@ public:
 
 	b3MeshData* m_mesh = nullptr;
 	b3BodyId m_bulletId = b3_nullBodyId;
-	float m_savedThreshold;
 };
 
 static int sampleStall = RegisterSample( "Continuous", "Stall", Stall::Create );
+
+// This shows how adjusting the CCD safety factor can engage continuous collision at
+// lower speeds to avoid the slight overlap that happens with discrete collision detection.
+// The best way to run this sample is:
+// 1. press pause (P)
+// 2. restart (R) or press the Drop button
+// 3. then single step (.)
+// Then look at the metrics and overlap. The shape is drawn orange while it is using
+// continuous collision detection.
+class SafetyFactor : public Sample
+{
+public:
+	explicit SafetyFactor( SampleContext* context )
+		: Sample( context )
+	{
+		if ( context->restart == false )
+		{
+			m_camera->SetView( 0.0f, 3.0f, 8.0f, { 0.0f, 1.0f, 0.0f } );
+		}
+
+		AddGroundBox( 20.0f );
+
+		m_bodyId = b3_nullBodyId;
+		m_extent = 0.5f;
+		m_height = 0.3f;
+		m_safetyFactor = 0.1f;
+		m_overlap = 0.0f;
+
+		Launch();
+	}
+
+	void Launch()
+	{
+		if ( B3_IS_NON_NULL( m_bodyId ) )
+		{
+			b3DestroyBody( m_bodyId );
+		}
+
+		b3BodyDef bodyDef = b3DefaultBodyDef();
+		bodyDef.type = b3_dynamicBody;
+		bodyDef.position = { 0.0f, m_height + m_extent, 0.0f };
+		bodyDef.safetyFactor = m_safetyFactor;
+		m_bodyId = b3CreateBody( m_worldId, &bodyDef );
+
+		b3ShapeDef shapeDef = b3DefaultShapeDef();
+		b3BoxHull box = b3MakeBoxHull( m_extent, m_extent, m_extent );
+		b3CreateHullShape( m_bodyId, &shapeDef, &box.base );
+
+		m_overlap = 0.0f;
+	}
+
+	void Step() override
+	{
+		Sample::Step();
+
+		if ( m_didStep )
+		{
+			// Contacts are computed at the beginning of the step, so the manifold holds the initial separation.
+			b3ContactData data;
+			int count = b3Body_GetContactData( m_bodyId, &data, 1 );
+			if ( count == 1 )
+			{
+				for ( int i = 0; i < data.manifoldCount; ++i )
+				{
+					const b3Manifold* manifold = data.manifolds + i;
+					for ( int j = 0; j < manifold->pointCount; ++j )
+					{
+						m_overlap = b3MaxFloat( m_overlap, -manifold->points[j].separation );
+					}
+				}
+			}
+		}
+
+		// The overlap line sits below the ground surface, so dash it where the ground hides it
+		DrawLineEx( { -3.0f, -m_overlap, 0.0f }, { 3.0f, -m_overlap, 0.0f }, MakeColor( b3_colorRed ),
+					DEFAULT_LINE_THICKNESS_PX, OVERLAY_THICKNESS_PIXELS, OVERLAY_OCCLUSION_DASHED );
+
+		float timeStep = m_context->hertz > 0.0f ? 1.0f / m_context->hertz : 0.0f;
+		float motion = timeStep * b3Length( b3Body_GetLinearVelocity( m_bodyId ) );
+
+		DrawTextLine( "actual movement = %.3f m", motion );
+		DrawTextLine( "fast movement = %.3f m", m_safetyFactor * m_extent );
+		DrawTextLine( "overlap = %.4f m", m_overlap );
+	}
+
+	bool DrawControls() override
+	{
+		bool changed = false;
+
+		ImGui::PushItemWidth( 10.0f * ImGui::GetFontSize() );
+		changed |= ImGui::SliderFloat( "Height", &m_height, 0.0f, 2.0f, "%.2f" );
+		changed |= ImGui::SliderFloat( "Safety", &m_safetyFactor, 0.0f, 1.0f, "%.2f" );
+		ImGui::PopItemWidth();
+
+		if ( ImGui::Button( "Drop" ) || changed )
+		{
+			Launch();
+		}
+
+		return true;
+	}
+
+	static Sample* Create( SampleContext* context )
+	{
+		return new SafetyFactor( context );
+	}
+
+	b3BodyId m_bodyId;
+	float m_extent;
+	float m_height;
+	float m_safetyFactor;
+	float m_overlap;
+};
+
+static int sampleSafetyFactor = RegisterSample( "Continuous", "Safety Factor", SafetyFactor::Create );

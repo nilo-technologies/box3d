@@ -4,6 +4,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 // Compile-time options. Edit box3d/config.h, or define BOX3D_USER_CONFIG to
@@ -38,7 +39,7 @@
 #ifdef __cplusplus
 	#define B3_API extern "C" BOX3D_EXPORT
 	#define B3_INLINE inline
-
+	#define B3_ALIGN_AS(N) alignas(N)
 #if defined( _MSC_VER )
 	#define B3_FORCE_INLINE __forceinline
 #elif defined( __GNUC__ ) || defined( __clang__ )
@@ -52,6 +53,7 @@
 #else
 	#define B3_API BOX3D_EXPORT
 	#define B3_INLINE static inline
+	#define B3_ALIGN_AS(N) _Alignas(N)
 
 #if defined( _MSC_VER )
 	#define B3_FORCE_INLINE static __forceinline
@@ -66,6 +68,13 @@
 	#define B3_ZERO_INIT {0}
 #endif
 // clang-format on
+
+// This is used to validate arguments for functions similar to printf.
+#if defined( __GNUC__ ) || defined( __clang__ )
+#define B3_PRINTF_FORMAT( INDEX1, INDEX2 ) __attribute__( ( format( printf, INDEX1, INDEX2 ) ) )
+#else
+#define B3_PRINTF_FORMAT( INDEX1, INDEX2 )
+#endif
 
 #if defined( BOX3D_VALIDATE ) && !defined( NDEBUG )
 #define B3_ENABLE_VALIDATION 1
@@ -85,11 +94,12 @@
 /// Prototype for user allocation function.
 ///	@param size the allocation size in bytes
 ///	@param alignment the required alignment, guaranteed to be a power of 2
-typedef void* b3AllocFcn( int32_t size, int32_t alignment );
+typedef void* b3AllocFcn( size_t size, int32_t alignment );
 
 /// Prototype for user free function.
 ///	@param mem the memory previously allocated through `b3AllocFcn`
-typedef void b3FreeFcn( void* mem );
+///	@param size the size of the allocation in bytes.
+typedef void b3FreeFcn( void* mem, size_t size );
 
 /// Prototype for the user assert callback. Return 0 to skip the debugger break.
 typedef int b3AssertFcn( const char* condition, const char* fileName, int lineNumber );
@@ -102,7 +112,7 @@ typedef void b3LogFcn( const char* message );
 B3_API void b3SetAllocator( b3AllocFcn* allocFcn, b3FreeFcn* freeFcn );
 
 /// Total bytes allocated by Box3D
-B3_API int32_t b3GetByteCount( void );
+B3_API int64_t b3GetByteCount( void );
 
 /// Override the default assert callback.
 ///	@param assertFcn a non-null assert callback
@@ -124,7 +134,7 @@ B3_API void b3SetAssertFcn( b3AssertFcn* assertFcn );
 /// Internal assertion handler. Allows for host intervention.
 B3_API int b3InternalAssert( const char* condition, const char* fileName, int lineNumber );
 /// Assert that a condition is true.
-#define B3_ASSERT( condition )                                                                                                  \
+#define B3_ASSERT( condition )                                                                                                   \
 	( (void)( ( !!( condition ) ) || ( b3InternalAssert( #condition, __FILE__, (int)( __LINE__ ) ), 0 ) ) )
 #else
 #define B3_ASSERT( ... ) ( (void)0 )
@@ -163,6 +173,13 @@ B3_API b3Version b3GetVersion( void );
 /// @return true if the library was built with BOX3D_DOUBLE_PRECISION (large world mode)
 B3_API bool b3IsDoublePrecision( void );
 
+/// @return the value of B3_MAX_MANIFOLD_POINTS the library was compiled with. Useful for
+/// an ABI test.
+B3_API int b3GetMaxManifoldPoints( void );
+
+/// @return true if the current CPU has the AVX2 instruction set.
+B3_API bool b3IsAVX2Available( void );
+
 /**@}*/
 
 //! @cond
@@ -185,9 +202,5 @@ B3_API void b3Sleep( int milliseconds );
 // Simple djb2 hash function for determinism testing
 #define B3_HASH_INIT 5381
 B3_API uint32_t b3Hash( uint32_t hash, const uint8_t* data, int count );
-
-// Dump file support functions
-B3_API void b3WriteBinaryFile( void* data, int size, const char* fileName );
-B3_API void* b3ReadBinaryFile( const char* prefix, const char* fileName, int* memSize );
 
 //! @endcond

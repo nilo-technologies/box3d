@@ -8,11 +8,16 @@
 #include "benchmarks.h"
 #include "utils.h"
 
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+#include "sat_benchmark.h"
+#endif
+
 #include "box3d/box3d.h"
 #include "box3d/constants.h"
 #include "box3d/math_functions.h"
 
 #include <assert.h>
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,6 +56,139 @@ static void MinProfile( b3Profile* p1, const b3Profile* p2 )
 	p1->sleepIslands = b3MinFloat( p1->sleepIslands, p2->sleepIslands );
 }
 
+// Match a name=value option in either its short or long spelling. Returns the value or NULL.
+static const char* MatchValue( const char* arg, const char* shortName, const char* longName )
+{
+	size_t n = strlen( shortName );
+	if ( strncmp( arg, shortName, n ) == 0 )
+	{
+		return arg + n;
+	}
+	n = strlen( longName );
+	if ( strncmp( arg, longName, n ) == 0 )
+	{
+		return arg + n;
+	}
+	return NULL;
+}
+
+// Distinguish a numeric benchmark index from a name. Empty string is not numeric.
+static bool IsAllDigits( const char* s )
+{
+	if ( *s == 0 )
+	{
+		return false;
+	}
+	for ( ; *s != 0; ++s )
+	{
+		if ( isdigit( (unsigned char)*s ) == 0 )
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool EqualsIgnoreCase( const char* a, const char* b )
+{
+	while ( *a != 0 && *b != 0 )
+	{
+		if ( tolower( (unsigned char)*a ) != tolower( (unsigned char)*b ) )
+		{
+			return false;
+		}
+		++a;
+		++b;
+	}
+	return *a == *b;
+}
+
+static int FindBenchmark( const Benchmark* benchmarks, int count, const char* name )
+{
+	for ( int i = 0; i < count; ++i )
+	{
+		if ( EqualsIgnoreCase( benchmarks[i].name, name ) )
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+// GJK versus SAT on hull pairs held inside the speculative margin. Reports the min time per query over the runs.
+static void RunSatBenchmarks( int runCount )
+{
+#ifdef NDEBUG
+	int repeatCount = 20;
+#else
+	int repeatCount = 1;
+#endif
+
+	printf( "benchmark: sat, pairs = %d, repeats = %d, simd width = %d\n", SAT_PAIR_COUNT, repeatCount, GetSimdWidth() );
+	printf( "time per query (us), sat full has the inscribed sphere bound disabled\n" );
+	printf( "%-20s %10s %10s %10s %10s\n", "pair", "gjk cold", "gjk warm", "sat", "sat full" );
+
+	for ( int typeA = 0; typeA < satHull_count; ++typeA )
+	{
+		for ( int typeB = typeA; typeB < satHull_count; ++typeB )
+		{
+			SatBenchmarkData* data = CreateSatBenchmark( (SatHullType)typeA, (SatHullType)typeB );
+
+			float coldMs = FLT_MAX;
+			float warmMs = FLT_MAX;
+			float satMs = FLT_MAX;
+			float fullMs = FLT_MAX;
+			int queryCount = 0;
+			int earlyReturnCount = 0;
+
+			for ( int runIndex = 0; runIndex < runCount; ++runIndex )
+			{
+				EnableSatInscribedSphere( data, true );
+				SatBenchmarkResult cold = RunSatBenchmark( data, repeatCount, false );
+				SatBenchmarkResult warm = RunSatBenchmark( data, repeatCount, true );
+
+				EnableSatInscribedSphere( data, false );
+				SatBenchmarkResult full = RunSatBenchmark( data, repeatCount, false );
+
+				coldMs = b3MinFloat( coldMs, cold.distanceMs );
+				warmMs = b3MinFloat( warmMs, warm.distanceMs );
+				satMs = b3MinFloat( satMs, b3MinFloat( cold.satMs, warm.satMs ) );
+				fullMs = b3MinFloat( fullMs, full.satMs );
+				queryCount = cold.queryCount;
+				earlyReturnCount += cold.earlyReturnCount + full.earlyReturnCount;
+			}
+
+			char name[32];
+			snprintf( name, sizeof( name ), "%s/%s", GetSatHullName( (SatHullType)typeA ), GetSatHullName( (SatHullType)typeB ) );
+
+			float scale = 1000.0f / queryCount;
+			printf( "%-20s %10.3f %10.3f %10.3f %10.3f\n", name, scale * coldMs, scale * warmMs, scale * satMs,
+					scale * fullMs );
+
+			if ( earlyReturnCount > 0 || data->maxPlacementError > 0.01f * data->targetDistance )
+			{
+				printf( "  warning: early returns = %d, max placement error = %g\n", earlyReturnCount,
+						data->maxPlacementError );
+			}
+
+			DestroySatBenchmark( data );
+		}
+	}
+
+	printf( "\n" );
+}
+#endif
+
+static void PrintBenchmarks( const Benchmark* benchmarks, int count )
+{
+	printf( "Registered benchmarks:\n" );
+	for ( int i = 0; i < count; ++i )
+	{
+		printf( "  %2d  %s\n", i, benchmarks[i].name );
+	}
+}
+
 // Box3D benchmark application. On Windows it is important to use affinity avoid cross CCD
 // usage or efficiency cores. Also on Windows create a power plan with Processor power management
 // Min/Max of 99%. This prevents boosting and makes the benchmarks more repeatable.
@@ -62,13 +200,20 @@ static void MinProfile( b3Profile* p1, const b3Profile* p2 )
 // Run all benchmarks with 4 workers only.
 // start /affinity 0x5555 .\build\bin\Release\benchmark.exe -t=4 -w=4
 
-// start /affinity 0x5555 .\build\bin\Release\benchmark.exe -t=4 -w=4 -b=5 -r=5
+// List the registered benchmarks.
+// .\build\bin\Release\benchmark.exe -l
+
+// Run a single benchmark by name with 4 workers.
+// start /affinity 0x5555 .\build\bin\Release\benchmark.exe -t=4 -w=4 --benchmark=many_pyramids -r=5
 
 // Run benchmark 3 with 4 workers and repeat 20 times. Record the step times.
 // start /affinity 0x5555 .\build\bin\Release\benchmark.exe -t=4 -w=4 -b=3 -r=20 -s
 
 // Run benchmark 3 with 4 workers and run once. Disable continuous collision. Record the step times.
 // start /affinity 0x5555 .\build\bin\Release\benchmark.exe -t=4 -w=4 -b=3 -r=1 -nc -s
+
+// Compare GJK and SAT on hull pairs in the speculative regime. Static Box3D only.
+// start /affinity 0x5555 .\build\bin\Release\benchmark.exe --sat -r=5
 
 int main( int argc, char** argv )
 {
@@ -77,18 +222,22 @@ int main( int argc, char** argv )
 #endif
 
 	Benchmark benchmarks[] = {
+		{ "convex_pile", GetConvexPileCapacity, CreateConvexPile, NULL, NULL, 500 },
+		{ "joint_grid", NULL, CreateJointGrid, NULL, NULL, 100 },
+		{ "junkyard", GetJunkyardCapacity, CreateJunkyard, NULL, StepJunkyard, 500 },
+		{ "large_pyramid", NULL, CreateLargePyramid, NULL, NULL, 200 },
+		{ "large_world", GetLargeWorldCapacity, CreateLargeWorld, NULL, StepLargeWorld, 500 },
+		{ "many_pyramids", NULL, CreateManyPyramids, NULL, NULL, 100 },
+		{ "mesh_drop", NULL, CreateMeshDropBenchmark, DestroyMeshDropBenchmark, NULL, 170 },
+		{ "rain", GetRainCapacity, CreateRain, DestroyRain, StepRain, 400 },
+		{ "sleep", GetSleepCapacity, CreateSleep, NULL, StepSleep, 300 },
+		{ "spinner", GetSpinnerCapacity, CreateSpinner, DestroySpinner, NULL, 800 },
 		{ "trees100", NULL, CreateTrees100, DestroyTrees, NULL, 500 },
 		{ "trees50", NULL, CreateTrees50, DestroyTrees, NULL, 500 },
 		{ "trees25", NULL, CreateTrees25, DestroyTrees, NULL, 500 },
-		{ "joint_grid", NULL, CreateJointGrid, NULL, NULL, 100 },
-		{ "junkyard", NULL, CreateJunkyard, NULL, StepJunkyard, 500 },
-		{ "large_pyramid", NULL, CreateLargePyramid, NULL, NULL, 200 },
-		{ "many_pyramids", NULL, CreateManyPyramids, NULL, NULL, 100 },
-		{ "rain", GetRainCapacity, CreateRain, DestroyRain, StepRain, 400 },
+		{ "village", GetVillageCapacity, CreateVillage, DestroyVillage, StepVillage, VILLAGE_STEP_COUNT },
 		{ "washer", GetWasherCapacity, CreateWasher, NULL, NULL, 1000 },
-		{ "large_world", GetLargeWorldCapacity, CreateLargeWorld, NULL, StepLargeWorld, 500 },
 		//{ "smash", CreateSmash, NULL, 300 },
-		//{ "spinner", CreateSpinner, StepSpinner, 1400 },
 		//{ "tumbler", CreateTumbler, NULL, 750 },
 	};
 
@@ -113,7 +262,7 @@ int main( int argc, char** argv )
 		.solveImpulses = FLT_MAX,
 		.integratePositions = FLT_MAX,
 		.relaxImpulses = FLT_MAX,
-		.applyRestitution = FLT_MAX,
+		.restitution = FLT_MAX,
 		.storeImpulses = FLT_MAX,
 		.splitIslands = FLT_MAX,
 		.transforms = FLT_MAX,
@@ -136,48 +285,101 @@ int main( int argc, char** argv )
 	b3Counters counters = { 0 };
 	bool enableContinuous = true;
 	bool recordStepTimes = false;
+	bool runSat = false;
+	int simdWidth = 0;
 
 	assert( maxThreadCount <= B3_MAX_WORKERS );
 
 	for ( int i = 1; i < argc; ++i )
 	{
 		const char* arg = argv[i];
-		if ( strncmp( arg, "-t=", 3 ) == 0 )
+		const char* value;
+		if ( ( value = MatchValue( arg, "-t=", "--threads=" ) ) != NULL )
 		{
-			int threadCount = atoi( arg + 3 );
+			int threadCount = atoi( value );
 			maxThreadCount = b3ClampInt( threadCount, 1, maxThreadCount );
 		}
-		else if ( strncmp( arg, "-b=", 3 ) == 0 )
+		else if ( ( value = MatchValue( arg, "-b=", "--benchmark=" ) ) != NULL )
 		{
-			singleBenchmark = atoi( arg + 3 );
-			singleBenchmark = b3ClampInt( singleBenchmark, 0, benchmarkCount - 1 );
+			// Accept an index for backward compatibility, otherwise an exact name
+			if ( IsAllDigits( value ) )
+			{
+				singleBenchmark = b3ClampInt( atoi( value ), 0, benchmarkCount - 1 );
+			}
+			else
+			{
+				singleBenchmark = FindBenchmark( benchmarks, benchmarkCount, value );
+				if ( singleBenchmark == -1 )
+				{
+					printf( "No benchmark named \"%s\"\n", value );
+					PrintBenchmarks( benchmarks, benchmarkCount );
+					exit( 1 );
+				}
+			}
 		}
-		else if ( strncmp( arg, "-w=", 3 ) == 0 )
+		else if ( ( value = MatchValue( arg, "-w=", "--workers=" ) ) != NULL )
 		{
-			singleWorkerCount = atoi( arg + 3 );
+			singleWorkerCount = atoi( value );
 		}
-		else if ( strncmp( arg, "-r=", 3 ) == 0 )
+		else if ( ( value = MatchValue( arg, "-r=", "--repeats=" ) ) != NULL )
 		{
-			runCount = b3ClampInt( atoi( arg + 3 ), 1, 1000 );
+			runCount = b3ClampInt( atoi( value ), 1, 1000 );
 		}
-		else if ( strncmp( arg, "-nc", 3 ) == 0 )
+		else if ( strcmp( arg, "-nc" ) == 0 || strcmp( arg, "--no-continuous" ) == 0 )
 		{
 			enableContinuous = false;
 			printf( "Continuous disabled\n" );
 		}
-		else if ( strncmp( arg, "-s", 3 ) == 0 )
+		else if ( strcmp( arg, "-s" ) == 0 || strcmp( arg, "--record-steps" ) == 0 )
 		{
 			recordStepTimes = true;
 		}
-		else if ( strcmp( arg, "-h" ) == 0 )
+		else if ( strcmp( arg, "-sat" ) == 0 || strcmp( arg, "--sat" ) == 0 )
+		{
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+			runSat = true;
+#else
+			printf( "The SAT benchmark requires static linkage\n" );
+			exit( 1 );
+#endif
+		}
+		else if ( ( value = MatchValue( arg, "-simd=", "--simd-width=" ) ) != NULL )
+		{
+			simdWidth = atoi( value );
+			if ( simdWidth != 4 && simdWidth != 8 )
+			{
+				printf( "The SIMD width must be 4 or 8\n" );
+				exit( 1 );
+			}
+
+#ifndef BOX3D_INTERNAL_BENCHMARKS
+			printf( "Forcing the SIMD width requires static linkage\n" );
+			exit( 1 );
+#endif
+		}
+		else if ( strcmp( arg, "-l" ) == 0 || strcmp( arg, "--list" ) == 0 )
+		{
+			PrintBenchmarks( benchmarks, benchmarkCount );
+			exit( 0 );
+		}
+		else if ( strcmp( arg, "-h" ) == 0 || strcmp( arg, "--help" ) == 0 )
 		{
 			printf( "Usage\n"
-					"-t=<integer>: the maximum number of threads to use\n"
-					"-b=<integer>: run a single benchmark\n"
-					"-w=<integer>: run a single worker count\n"
-					"-r=<integer>: number of repeats (default is 4)\n"
-					"-s: record step times\n" );
+					"-t, --threads=<integer>: the maximum number of threads to use\n"
+					"-b, --benchmark=<index|name>: run a single benchmark by index or name\n"
+					"-w, --workers=<integer>: run a single worker count\n"
+					"-r, --repeats=<integer>: number of repeats (default is 4)\n"
+					"-nc, --no-continuous: disable continuous collision\n"
+					"-s, --record-steps: record step times\n"
+					"-sat, --sat: compare GJK and SAT on hull pairs, then exit\n"
+					"-simd, --simd-width=<4|8>: force the SIMD width (static Box3D only)\n"
+					"-l, --list: list the registered benchmarks\n"
+					"-h, --help: print this help\n" );
 			exit( 0 );
+		}
+		else
+		{
+			printf( "Unknown option \"%s\", use -h for help\n", arg );
 		}
 	}
 
@@ -186,8 +388,25 @@ int main( int argc, char** argv )
 		singleWorkerCount = b3ClampInt( singleWorkerCount, 1, maxThreadCount );
 	}
 
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+	if ( simdWidth != 0 )
+	{
+		SetSimdWidth( simdWidth );
+	}
+
+	if ( runSat )
+	{
+		RunSatBenchmarks( runCount );
+		free( profiles );
+		return 0;
+	}
+#endif
+
 	printf( "Starting benchmarks\n" );
 	printf( "======================================\n" );
+#ifdef BOX3D_INTERNAL_BENCHMARKS
+	printf( "simd width = %d\n", GetSimdWidth() );
+#endif
 
 	for ( int benchmarkIndex = 0; benchmarkIndex < benchmarkCount; ++benchmarkIndex )
 	{

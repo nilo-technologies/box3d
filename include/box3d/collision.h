@@ -44,11 +44,12 @@ B3_API uint64_t b3DynamicTree_GetCategoryBits( b3DynamicTree* tree, int proxyId 
 B3_API b3TreeStats b3DynamicTree_Query( const b3DynamicTree* tree, b3AABB aabb, uint64_t maskBits, bool requireAllBits,
 										b3TreeQueryCallbackFcn* callback, void* context );
 
-/// Query an AABB for the closest object. The callback function is called for each proxy that might be closest to the supplied point.
+/// Query an AABB for the closest object. The callback function is called for each proxy that might be closest to the supplied
+/// point.
 /// @param tree the dynamic tree to query
 /// @param point the query point
-/// @param maskBits nodes are skipped if the bit-wise AND with the node category bits is zero
-/// @param requireAllBits nodes are skipped if the bit-wise AND with the node category bits does not equal the maskBits
+/// @param maskBits proxies are skipped if the bit-wise AND with the proxy category bits is zero
+/// @param requireAllBits proxies are skipped if the bit-wise AND with the proxy category bits does not equal the maskBits
 /// @param callback a user provided instance of b3TreeQueryClosestCallbackFcn
 /// @param context a user context object that is provided to the callback
 /// @param minDistanceSqr the initial and final minimum squared distance. Provide a small initial to restrict the search and
@@ -67,8 +68,8 @@ B3_API b3TreeStats b3DynamicTree_QueryClosest( const b3DynamicTree* tree, b3Vec3
 ///	However, this filtering may be approximate, so the user should still apply filtering to results.
 /// @param tree the dynamic tree to ray cast
 /// @param input the ray cast input data. The ray extends from p1 to p1 + maxFraction * (p2 - p1)
-/// @param maskBits bit mask test: `bool accept = (maskBits & node->categoryBits) != 0;`
-/// @param requireAllBits modifies bit mask test: `bool accept = (maskBits & node->categoryBits) == maskBits;`
+/// @param maskBits bit mask test: `bool accept = (maskBits & proxy->categoryBits) != 0;`
+/// @param requireAllBits modifies bit mask test: `bool accept = (maskBits & proxy->categoryBits) == maskBits;`
 /// @param callback a callback function that is called for each proxy that is hit by the ray
 /// @param context user context that is passed to the callback
 ///	@return performance data
@@ -80,9 +81,6 @@ B3_API b3TreeStats b3DynamicTree_RayCast( const b3DynamicTree* tree, const b3Ray
 /// spatial queries so the tree traversal stays float while the narrow phase stays precise.
 B3_API b3TreeStats b3DynamicTree_BoxCast( const b3DynamicTree* tree, const b3BoxCastInput* input, uint64_t maskBits,
 										  bool requireAllBits, b3TreeBoxCastCallbackFcn* callback, void* context );
-
-/// Validate this tree. For testing.
-B3_API void b3DynamicTree_Validate( const b3DynamicTree* tree );
 
 /// Get the height of the binary tree.
 B3_API int b3DynamicTree_GetHeight( const b3DynamicTree* tree );
@@ -105,8 +103,8 @@ B3_API int b3DynamicTree_GetByteCount( const b3DynamicTree* tree );
 /// Validate this tree. For testing.
 B3_API void b3DynamicTree_Validate( const b3DynamicTree* tree );
 
-/// Validate this tree has no enlarged AABBs. For testing.
-B3_API void b3DynamicTree_ValidateNoEnlarged( const b3DynamicTree* tree );
+/// Validate this tree has no moved nodes. For testing.
+B3_API void b3DynamicTree_ValidateNoMoved( const b3DynamicTree* tree );
 
 /// Save this tree to a file for debugging
 B3_API void b3DynamicTree_Save( const b3DynamicTree* tree, const char* fileName );
@@ -117,13 +115,13 @@ B3_API b3DynamicTree b3DynamicTree_Load( const char* fileName, float scale );
 /// Get proxy user data
 B3_INLINE uint64_t b3DynamicTree_GetUserData( const b3DynamicTree* tree, int proxyId )
 {
-	return tree->nodes[proxyId].userData;
+	return tree->proxies[proxyId].userData;
 }
 
 /// Get the AABB of a proxy
 B3_INLINE b3AABB b3DynamicTree_GetAABB( const b3DynamicTree* tree, int proxyId )
 {
-	return tree->nodes[proxyId].aabb;
+	return tree->nodes[tree->proxies[proxyId].node].aabb;
 }
 
 /**@}*/ // tree
@@ -166,17 +164,6 @@ B3_INLINE const b3HullHalfEdge* b3GetHullEdges( const b3HullData* hull )
 	return (const b3HullHalfEdge*)( (intptr_t)hull + hull->edgeOffset );
 }
 
-/// Get read only hull faces.
-B3_INLINE const b3HullFace* b3GetHullFaces( const b3HullData* hull )
-{
-	if ( hull->faceOffset == 0 )
-	{
-		return NULL;
-	}
-
-	return (const b3HullFace*)( (intptr_t)hull + hull->faceOffset );
-}
-
 /// Get read only hull planes.
 B3_INLINE const b3Plane* b3GetHullPlanes( const b3HullData* hull )
 {
@@ -188,6 +175,54 @@ B3_INLINE const b3Plane* b3GetHullPlanes( const b3HullData* hull )
 	return (const b3Plane*)( (intptr_t)hull + hull->planeOffset );
 }
 
+/// Get read only hull faces.
+B3_INLINE const b3HullFace* b3GetHullFaces( const b3HullData* hull )
+{
+	if ( hull->faceOffset == 0 )
+	{
+		return NULL;
+	}
+
+	return (const b3HullFace*)( (intptr_t)hull + hull->faceOffset );
+}
+
+/// Get read only SOA vertices. This is an array of vertices with all x values,
+/// y values, and z values as separate arrays. The array lengths are padded to
+/// a multiple of 8. The padded values are repeats of the first value.
+B3_INLINE const float* b3GetHullSoaVertices( const b3HullData* hull )
+{
+	if ( hull->soaVertexOffset == 0 )
+	{
+		return NULL;
+	}
+
+	return (const float*)( (intptr_t)hull + hull->soaVertexOffset );
+}
+
+/// Get read only SOA unit normal vectors. This is an array of normals with all x values,
+/// y values, and z values as separate arrays. The array lengths are padded to
+/// a multiple of 8. The padded values are 0.
+B3_INLINE const float* b3GetHullSoaNormals( const b3HullData* hull )
+{
+	if ( hull->soaNormalOffset == 0 )
+	{
+		return NULL;
+	}
+
+	return (const float*)( (intptr_t)hull + hull->soaNormalOffset );
+}
+
+/// Get the dot products of the two adjacent face normals for each full edge.
+B3_INLINE const float* b3GetHullEdgeCosines( const b3HullData* hull )
+{
+	if ( hull->edgeCosineOffset == 0 )
+	{
+		return NULL;
+	}
+
+	return (const float*)( (intptr_t)hull + hull->edgeCosineOffset );
+}
+
 /// Create a tessellated cylinder as a hull.
 B3_API b3HullData* b3CreateCylinder( float height, float radius, float yOffset, int sides );
 
@@ -197,7 +232,11 @@ B3_API b3HullData* b3CreateCone( float height, float radius1, float radius2, int
 /// Create a rock shaped hull.
 B3_API b3HullData* b3CreateRock( float radius );
 
-/// Create a generic convex hull.
+/// Hull of 32 pseudo random points on a sphere. From the convex pile hull in PEEL.
+B3_API b3HullData* b3CreateComplexHull( float radius );
+
+/// Create a generic convex hull. This can fail if B3_MAX_HULL_VERTICES, B3_MAX_HULL_FACES,
+/// or B3_MAX_HULL_EDGES is exceeded.
 B3_API b3HullData* b3CreateHull( const b3Vec3* points, int pointCount, int maxVertexCount );
 
 /// Deep clone a hull.
@@ -429,15 +468,8 @@ B3_API b3CompoundData* b3CreateCompound( const b3CompoundDef* def );
 /// Destroy a compound shape.
 B3_API void b3DestroyCompound( b3CompoundData* compound );
 
-/// If bytes is null then this returns the number of required bytes. This clones all the
-/// data into the bytes buffer. This is expected to run offline or asynchronously.
-/// This mutates the compound to nullify pointers, leaving the compound in an unusable state.
-B3_API uint8_t* b3ConvertCompoundToBytes( b3CompoundData* compound );
-
-/// Convert bytes to compound. This does not clone. The bytes must remain in scope while the
-/// compound is used. This is done to improve run-time performance and allow for instancing.
-/// The bytes are mutated to fixup pointers.
-B3_API b3CompoundData* b3ConvertBytesToCompound( uint8_t* bytes, int byteCount );
+/// Cast serialized bytes into a compound and validate. Returns null if invalid.
+B3_API const b3CompoundData* b3ValidateCompound( const uint8_t* bytes, int byteCount );
 
 /**@}*/ // compound
 
@@ -613,17 +645,32 @@ B3_API void b3CollideHullAndCapsule( b3LocalManifold* manifold, int capacity, co
 B3_API void b3CollideHulls( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, const b3HullData* hullB,
 							b3Transform transformBtoA, b3SATCache* cache );
 
-/// Collide a capsule and a triangle.
-B3_API void b3CollideCapsuleAndTriangle( b3LocalManifold* manifold, int capacity, const b3Capsule* capsuleA,
-										 const b3Vec3* triangleB, b3SimplexCache* cache );
+/// Collide a triangle and capsule. Normal points from triangle to capsule.
+B3_API void b3CollideTriangleAndCapsule( b3LocalManifold* manifold, int capacity, const b3Vec3* triangleA,
+										 const b3Capsule* capsuleB, b3SimplexCache* cache );
 
-/// Collide a hull and a triangle.
-B3_API void b3CollideHullAndTriangle( b3LocalManifold* manifold, int capacity, const b3HullData* hullA, b3Vec3 v1, b3Vec3 v2,
-									  b3Vec3 v3, int triangleFlags, b3SATCache* cache );
+/// Collide a triangle and hull. Normal points from triangle to hull.
+B3_API void b3CollideTriangleAndHull( b3LocalManifold* manifold, int capacity, b3Vec3 v1, b3Vec3 v2, b3Vec3 v3, int triangleFlags,
+									  const b3HullData* hullB, b3SATCache* cache, bool enableSpeculative );
 
-/// Collide a sphere and a triangle.
-B3_API void b3CollideSphereAndTriangle( b3LocalManifold* manifold, int capacity, const b3Sphere* sphereA,
-										const b3Vec3* triangleB );
+/// Collide a triangle and sphere. Normal points from triangle to sphere.
+B3_API void b3CollideTriangleAndSphere( b3LocalManifold* manifold, int capacity, const b3Vec3* triangleA,
+										const b3Sphere* sphereB );
+
+/// This is used for computing 2D hulls in service of contact manifold simplification.
+/// Placed here for testing. Internal.
+typedef struct b3Point2D
+{
+	b3Vec2 p;		   // 2D point
+	float separation;  // separation of the associated contact point
+	int originalIndex; // original index of the associated contact point
+} b3Point2D;
+
+/// Compute a 2D hull. Used internally for contact manifold simplification. Here for testing.
+B3_API int b3Hull2D( b3Point2D* pts, int count, b3Point2D* hull );
+
+/// Simplify a 2D hull. Used internally for contact manifold simplification. Here for testing.
+B3_API int b3SimplifyHull2D( b3Point2D* hull, int count, int target );
 
 /**@}*/ // collision
 

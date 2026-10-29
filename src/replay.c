@@ -5,15 +5,15 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
-#include "recording_replay.h"
+#include "replay.h"
 
 #include "body.h"
-#include "compound.h"
 #include "physics_world.h"
 #include "world_snapshot.h"
 
 #include "box3d/box3d.h"
 
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -288,6 +288,9 @@ b3PlaneResult b3RecR_PLANERESULT( b3RecReader* rdr )
 	v.plane.normal = b3RecR_VEC3( rdr );
 	v.plane.offset = b3RecR_F32( rdr );
 	v.point = b3RecR_VEC3( rdr );
+	v.triangleIndex = b3RecR_I32( rdr );
+	v.childIndex = b3RecR_I32( rdr );
+	v.materialIndex = b3RecR_I32( rdr );
 	return v;
 }
 
@@ -375,8 +378,8 @@ b3MotionLocks b3RecR_LOCKS( b3RecReader* rdr )
 // Rotating set of static string buffers, valid until the next 4 STR reads.
 const char* b3RecR_STR( b3RecReader* rdr )
 {
-	char* buf = rdr->strBufs[rdr->strNext];
-	rdr->strNext = ( rdr->strNext + 1 ) & 3;
+	char* buf = rdr->stringBuffers[rdr->nextString];
+	rdr->nextString = ( rdr->nextString + 1 ) & 3;
 
 	uint16_t len = b3RecR_U16( rdr );
 	if ( len == 0xFFFFu )
@@ -385,9 +388,9 @@ const char* b3RecR_STR( b3RecReader* rdr )
 	}
 
 	int n = (int)len;
-	if ( n > B3_BODY_NAME_LENGTH )
+	if ( n > B3_MAX_NAME_LENGTH )
 	{
-		n = B3_BODY_NAME_LENGTH;
+		n = B3_MAX_NAME_LENGTH;
 	}
 	b3RecRdrCheck( rdr, (int)len );
 	if ( rdr->ok && n > 0 )
@@ -425,6 +428,7 @@ b3BodyDef b3RecR_BODYDEF( b3RecReader* rdr )
 	def.angularDamping = b3RecR_F32( rdr );
 	def.gravityScale = b3RecR_F32( rdr );
 	def.sleepThreshold = b3RecR_F32( rdr );
+	def.safetyFactor = b3RecR_F32( rdr );
 	def.name = b3RecR_STR( rdr );
 	(void)b3RecR_U64( rdr ); // userData placeholder
 	def.motionLocks = b3RecR_LOCKS( rdr );
@@ -441,6 +445,8 @@ b3BodyDef b3RecR_BODYDEF( b3RecReader* rdr )
 b3ShapeDef b3RecR_SHAPEDEF( b3RecReader* rdr )
 {
 	b3ShapeDef def = b3DefaultShapeDef();
+
+	def.name = b3RecR_STR( rdr );
 	(void)b3RecR_U64( rdr ); // userData placeholder
 
 	int matCount = b3RecR_I32( rdr );
@@ -480,6 +486,7 @@ b3ShapeDef b3RecR_SHAPEDEF( b3RecReader* rdr )
 	def.enablePreSolveEvents = b3RecR_BOOL( rdr );
 	def.invokeContactCreation = b3RecR_BOOL( rdr );
 	def.updateBodyMass = b3RecR_BOOL( rdr );
+	def.enableSpeculativeContact = b3RecR_BOOL( rdr );
 	def.userData = NULL;
 	return def;
 }
@@ -672,6 +679,30 @@ b3WheelJointDef b3RecR_WHEELJOINTDEF( b3RecReader* rdr )
 	return def;
 }
 
+b3MoverJointDef b3RecR_MOVERJOINTDEF( b3RecReader* rdr )
+{
+	b3MoverJointDef def = b3DefaultMoverJointDef();
+	b3RecR_JointBase( rdr, &def.base );
+	def.linearVelocity = b3RecR_VEC3( rdr );
+	def.maxForce = b3RecR_F32( rdr );
+	return def;
+}
+
+b3PogoJointDef b3RecR_POGOJOINTDEF( b3RecReader* rdr )
+{
+	b3PogoJointDef def = b3DefaultPogoJointDef();
+	b3RecR_JointBase( rdr, &def.base );
+	def.normal = b3RecR_VEC3( rdr );
+	def.hertz = b3RecR_F32( rdr );
+	def.dampingRatio = b3RecR_F32( rdr );
+	def.restLength = b3RecR_F32( rdr );
+	def.maxTensionForce = b3RecR_F32( rdr );
+	def.maxCompressionForce = b3RecR_F32( rdr );
+	def.impulse = b3RecR_F32( rdr );
+	def.velocity = b3RecR_F32( rdr );
+	return def;
+}
+
 // Outliner body tracking. Defined after the player struct; forward declared here because the
 // create/destroy dispatch sits above that struct.
 static void b3RecTrackBodyCreate( b3RecPlayer* player, b3BodyId id );
@@ -733,37 +764,13 @@ static void b3RecCheckJointId( b3RecReader* rdr, b3JointId got, b3JointId rec )
 	b3RecCheckId( rdr, "joint", got.index1, got.generation, rec.index1, rec.generation );
 }
 
-// Registry slot reconstruction. Returns the live pointer for the given slot, building it
-// on first use. The hull case is handled inline at the call site since it doesn't cache.
-
-static void* b3RecGetLiveMesh( b3RegistrySlot* slot )
+b3RegistrySlot* b3RecGetSlot( b3RecReader* rdr, uint32_t id, b3GeometryKind kind )
 {
-	// Mesh is a self-contained blob used by reference, with no pointer fixup. Hand back the pristine
-	// bytes directly: they already outlive the world and are freed at teardown, so a copy would just
-	// double the memory. Compound can't do this, see b3RecGetLiveCompound.
-	return slot->bytes;
-}
-
-static void* b3RecGetLiveHeightField( b3RegistrySlot* slot )
-{
-	// Self-contained blob used by reference, like b3RecGetLiveMesh. The bytes already are a
-	// valid b3HeightFieldData with no pointer fixup, so hand them back directly.
-	return slot->bytes;
-}
-
-static void* b3RecGetLiveCompound( b3RegistrySlot* slot )
-{
-	if ( slot->live != NULL )
+	if ( rdr == NULL || id >= (uint32_t)rdr->slotCount || rdr->slots[id].kind != kind )
 	{
-		return slot->live;
+		return NULL;
 	}
-	// The copy is unavoidable here: b3ConvertBytesToCompound rewrites its input in place, while the
-	// pristine bytes must survive for keyframe registry seeding (b3RecSeedKeyframeRegistry). So we
-	// keep both the serialized bytes and a separate converted live object.
-	slot->live = b3Alloc( (size_t)slot->byteCount );
-	memcpy( slot->live, slot->bytes, (size_t)slot->byteCount );
-	b3ConvertBytesToCompound( (uint8_t*)slot->live, slot->byteCount );
-	return slot->live;
+	return rdr->slots + id;
 }
 
 // Dispatch functions, one per op
@@ -840,6 +847,23 @@ static void b3RecDispatch_WorldRebuildStaticTree( const b3RecArgs_WorldRebuildSt
 static void b3RecDispatch_WorldEnableSpeculative( const b3RecArgs_WorldEnableSpeculative* a, b3RecReader* rdr )
 {
 	b3World_EnableSpeculative( rdr->replayWorldId, a->flag );
+}
+
+static void b3RecDispatch_WorldSetRestitutionIterations( const b3RecArgs_WorldSetRestitutionIterations* a, b3RecReader* rdr )
+{
+	b3World_SetRestitutionIterations( rdr->replayWorldId, a->iterations );
+}
+
+static void b3RecDispatch_WorldEnableRestitutionPropagation( const b3RecArgs_WorldEnableRestitutionPropagation* a,
+															 b3RecReader* rdr )
+{
+	b3World_EnableRestitutionPropagation( rdr->replayWorldId, a->flag );
+}
+
+static void b3RecDispatch_WorldSetIsotropicInertiaTolerance( const b3RecArgs_WorldSetIsotropicInertiaTolerance* a,
+															 b3RecReader* rdr )
+{
+	b3World_SetIsotropicInertiaTolerance( rdr->replayWorldId, a->tolerance );
 }
 
 static void b3RecDispatch_CreateBody( const b3RecArgs_CreateBody* a, b3RecReader* rdr )
@@ -963,6 +987,11 @@ static void b3RecDispatch_BodySetSleepThreshold( const b3RecArgs_BodySetSleepThr
 	b3Body_SetSleepThreshold( b3RecMakeBodyId( rdr, a->body ), a->threshold );
 }
 
+static void b3RecDispatch_BodySetSafetyFactor( const b3RecArgs_BodySetSafetyFactor* a, b3RecReader* rdr )
+{
+	b3Body_SetSafetyFactor( b3RecMakeBodyId( rdr, a->body ), a->value );
+}
+
 static void b3RecDispatch_BodyDisable( const b3RecArgs_BodyDisable* a, b3RecReader* rdr )
 {
 	b3Body_Disable( b3RecMakeBodyId( rdr, a->body ) );
@@ -981,6 +1010,11 @@ static void b3RecDispatch_BodySetMotionLocks( const b3RecArgs_BodySetMotionLocks
 static void b3RecDispatch_BodySetBullet( const b3RecArgs_BodySetBullet* a, b3RecReader* rdr )
 {
 	b3Body_SetBullet( b3RecMakeBodyId( rdr, a->body ), a->flag );
+}
+
+static void b3RecDispatch_BodyAllowFastRotation( const b3RecArgs_BodyAllowFastRotation* a, b3RecReader* rdr )
+{
+	b3Body_AllowFastRotation( b3RecMakeBodyId( rdr, a->body ), a->flag );
 }
 
 static void b3RecDispatch_BodyEnableContactRecycling( const b3RecArgs_BodyEnableContactRecycling* a, b3RecReader* rdr )
@@ -1017,13 +1051,13 @@ static void b3RecDispatch_CreateHullShape( const b3RecArgs_CreateHullShape* a, b
 		return;
 	}
 	uint32_t id = a->geometryId;
-	if ( id >= (uint32_t)rdr->slotCount )
+	b3RegistrySlot* slot = b3RecGetSlot( rdr, id, b3_geometryHull );
+	if ( slot == NULL )
 	{
-		printf( "b3ReplayFile: hull geometryId %u out of range\n", id );
+		printf( "b3ReplayFile: hull geometryId %u is invalid\n", id );
 		rdr->ok = false;
 		return;
 	}
-	b3RegistrySlot* slot = rdr->slots + id;
 	b3BodyId bodyId = b3RecMakeBodyId( rdr, a->body );
 	// Hull is cloned by b3CreateHullShape into the world DB; no caching needed.
 	b3ShapeId gotId = b3CreateHullShape( bodyId, &a->def, (const b3HullData*)slot->bytes );
@@ -1038,14 +1072,14 @@ static void b3RecDispatch_CreateMeshShape( const b3RecArgs_CreateMeshShape* a, b
 		return;
 	}
 	uint32_t id = a->geometryId;
-	if ( id >= (uint32_t)rdr->slotCount )
+	b3RegistrySlot* slot = b3RecGetSlot( rdr, id, b3_geometryMesh );
+	if ( slot == NULL )
 	{
-		printf( "b3ReplayFile: mesh geometryId %u out of range\n", id );
+		printf( "b3ReplayFile: mesh geometryId %u is invalid\n", id );
 		rdr->ok = false;
 		return;
 	}
-	b3RegistrySlot* slot = rdr->slots + id;
-	const b3MeshData* mesh = (const b3MeshData*)b3RecGetLiveMesh( slot );
+	const b3MeshData* mesh = (const b3MeshData*)slot->bytes;
 	b3BodyId bodyId = b3RecMakeBodyId( rdr, a->body );
 	b3ShapeId gotId = b3CreateMeshShape( bodyId, &a->def, mesh, a->scale );
 	b3RecCheckShapeId( rdr, gotId, recId );
@@ -1059,20 +1093,14 @@ static void b3RecDispatch_CreateHeightFieldShape( const b3RecArgs_CreateHeightFi
 		return;
 	}
 	uint32_t id = a->geometryId;
-	if ( id >= (uint32_t)rdr->slotCount )
+	b3RegistrySlot* slot = b3RecGetSlot( rdr, id, b3_geometryHeightField );
+	if ( slot == NULL )
 	{
-		printf( "b3ReplayFile: heightfield geometryId %u out of range\n", id );
+		printf( "b3ReplayFile: heightfield geometryId %u is invalid\n", id );
 		rdr->ok = false;
 		return;
 	}
-	b3RegistrySlot* slot = rdr->slots + id;
-	const b3HeightFieldData* hf = (const b3HeightFieldData*)b3RecGetLiveHeightField( slot );
-	if ( hf == NULL )
-	{
-		printf( "b3ReplayFile: heightfield geometry %u is corrupt\n", id );
-		rdr->ok = false;
-		return;
-	}
+	const b3HeightFieldData* hf = (const b3HeightFieldData*)slot->bytes;
 	b3BodyId bodyId = b3RecMakeBodyId( rdr, a->body );
 	b3ShapeId gotId = b3CreateHeightFieldShape( bodyId, &a->def, hf );
 	b3RecCheckShapeId( rdr, gotId, recId );
@@ -1086,24 +1114,29 @@ static void b3RecDispatch_CreateCompoundShape( const b3RecArgs_CreateCompoundSha
 		return;
 	}
 	uint32_t id = a->geometryId;
-	if ( id >= (uint32_t)rdr->slotCount )
+	b3RegistrySlot* slot = b3RecGetSlot( rdr, id, b3_geometryCompound );
+	if ( slot == NULL )
 	{
-		printf( "b3ReplayFile: compound geometryId %u out of range\n", id );
+		printf( "b3ReplayFile: compound geometryId %u is invalid\n", id );
 		rdr->ok = false;
 		return;
 	}
-	b3RegistrySlot* slot = rdr->slots + id;
-	const b3CompoundData* compound = (const b3CompoundData*)b3RecGetLiveCompound( slot );
+	const b3CompoundData* compound = (const b3CompoundData*)slot->bytes;
 	b3BodyId bodyId = b3RecMakeBodyId( rdr, a->body );
 	// b3CreateCompoundShape takes a non-const def pointer; cast away const for the scratch def
 	b3ShapeDef shapeDef = a->def;
-	b3ShapeId gotId = b3CreateCompoundShape( bodyId, &shapeDef, compound );
+	b3ShapeId gotId = b3CreateBakedCompoundShape( bodyId, &shapeDef, compound );
 	b3RecCheckShapeId( rdr, gotId, recId );
 }
 
 static void b3RecDispatch_DestroyShape( const b3RecArgs_DestroyShape* a, b3RecReader* rdr )
 {
 	b3DestroyShape( b3RecMakeShapeId( rdr, a->shape ), a->updateBodyMass );
+}
+
+static void b3RecDispatch_ShapeSetName( const b3RecArgs_ShapeSetName* a, b3RecReader* rdr )
+{
+	b3Shape_SetName( b3RecMakeShapeId( rdr, a->shape ), a->name );
 }
 
 static void b3RecDispatch_ShapeSetDensity( const b3RecArgs_ShapeSetDensity* a, b3RecReader* rdr )
@@ -1124,6 +1157,11 @@ static void b3RecDispatch_ShapeSetRestitution( const b3RecArgs_ShapeSetRestituti
 static void b3RecDispatch_ShapeSetSurfaceMaterial( const b3RecArgs_ShapeSetSurfaceMaterial* a, b3RecReader* rdr )
 {
 	b3Shape_SetSurfaceMaterial( b3RecMakeShapeId( rdr, a->shape ), a->material );
+}
+
+static void b3RecDispatch_ShapeSetMeshMaterial( const b3RecArgs_ShapeSetMeshMaterial* a, b3RecReader* rdr )
+{
+	b3Shape_SetMeshMaterial( b3RecMakeShapeId( rdr, a->shape ), a->material, a->index );
 }
 
 static void b3RecDispatch_ShapeSetFilter( const b3RecArgs_ShapeSetFilter* a, b3RecReader* rdr )
@@ -1159,6 +1197,35 @@ static void b3RecDispatch_ShapeSetSphere( const b3RecArgs_ShapeSetSphere* a, b3R
 static void b3RecDispatch_ShapeSetCapsule( const b3RecArgs_ShapeSetCapsule* a, b3RecReader* rdr )
 {
 	b3Shape_SetCapsule( b3RecMakeShapeId( rdr, a->shape ), &a->capsule );
+}
+
+static void b3RecDispatch_ShapeSetHull( const b3RecArgs_ShapeSetHull* a, b3RecReader* rdr )
+{
+	uint32_t id = a->geometryId;
+	b3RegistrySlot* slot = b3RecGetSlot( rdr, id, b3_geometryHull );
+	if ( slot == NULL )
+	{
+		printf( "b3ReplayFile: hull geometryId %u is invalid\n", id );
+		rdr->ok = false;
+		return;
+	}
+	b3ShapeId shapeId = b3RecMakeShapeId( rdr, a->shape );
+	b3Shape_SetHull( shapeId, (const b3HullData*)slot->bytes );
+}
+
+static void b3RecDispatch_ShapeSetMesh( const b3RecArgs_ShapeSetMesh* a, b3RecReader* rdr )
+{
+	uint32_t id = a->geometryId;
+	b3RegistrySlot* slot = b3RecGetSlot( rdr, id, b3_geometryMesh );
+	if ( slot == NULL )
+	{
+		printf( "b3ReplayFile: mesh geometryId %u is invalid\n", id );
+		rdr->ok = false;
+		return;
+	}
+	b3ShapeId shapeId = b3RecMakeShapeId( rdr, a->shape );
+	const b3MeshData* mesh = (const b3MeshData*)slot->bytes;
+	b3Shape_SetMesh( shapeId, mesh, a->scale );
 }
 
 static void b3RecDispatch_ShapeApplyWind( const b3RecArgs_ShapeApplyWind* a, b3RecReader* rdr )
@@ -1266,6 +1333,24 @@ static void b3RecDispatch_CreateWheelJoint( const b3RecArgs_CreateWheelJoint* a,
 	def.base.bodyIdA = b3RecMakeBodyId( rdr, def.base.bodyIdA );
 	def.base.bodyIdB = b3RecMakeBodyId( rdr, def.base.bodyIdB );
 	b3RecCheckJointId( rdr, b3CreateWheelJoint( rdr->replayWorldId, &def ), recId );
+}
+
+static void b3RecDispatch_CreateMoverJoint( const b3RecArgs_CreateMoverJoint* a, b3RecReader* rdr )
+{
+	b3JointId recId = b3RecR_JOINTID( rdr );
+	b3MoverJointDef def = a->def;
+	def.base.bodyIdA = b3RecMakeBodyId( rdr, def.base.bodyIdA );
+	def.base.bodyIdB = b3RecMakeBodyId( rdr, def.base.bodyIdB );
+	b3RecCheckJointId( rdr, b3CreateMoverJoint( rdr->replayWorldId, &def ), recId );
+}
+
+static void b3RecDispatch_CreatePogoJoint( const b3RecArgs_CreatePogoJoint* a, b3RecReader* rdr )
+{
+	b3JointId recId = b3RecR_JOINTID( rdr );
+	b3PogoJointDef def = a->def;
+	def.base.bodyIdA = b3RecMakeBodyId( rdr, def.base.bodyIdA );
+	def.base.bodyIdB = b3RecMakeBodyId( rdr, def.base.bodyIdB );
+	b3RecCheckJointId( rdr, b3CreatePogoJoint( rdr->replayWorldId, &def ), recId );
 }
 
 static void b3RecDispatch_DestroyJoint( const b3RecArgs_DestroyJoint* a, b3RecReader* rdr )
@@ -1778,14 +1863,60 @@ static void b3RecDispatch_WheelJointSetTargetSteeringAngle( const b3RecArgs_Whee
 	b3WheelJoint_SetTargetSteeringAngle( b3RecMakeJointId( rdr, a->joint ), a->radians );
 }
 
+static void b3RecDispatch_MoverJointSetLinearVelocity(
+	const b3RecArgs_MoverJointSetLinearVelocity* a, b3RecReader* rdr )
+{
+	b3MoverJoint_SetLinearVelocity( b3RecMakeJointId( rdr, a->joint ), a->velocity );
+}
+
+static void b3RecDispatch_MoverJointSetMaxVelocityForce(
+	const b3RecArgs_MoverJointSetMaxVelocityForce* a, b3RecReader* rdr )
+{
+	b3MoverJoint_SetMaxVelocityForce( b3RecMakeJointId( rdr, a->joint ), a->maxForce );
+}
+
+static void b3RecDispatch_PogoJointSetRestLength( const b3RecArgs_PogoJointSetRestLength* a,
+												  b3RecReader* rdr )
+{
+	b3PogoJoint_SetRestLength( b3RecMakeJointId( rdr, a->joint ), a->length );
+}
+
+static void b3RecDispatch_PogoJointSetSpringHertz( const b3RecArgs_PogoJointSetSpringHertz* a,
+												   b3RecReader* rdr )
+{
+	b3PogoJoint_SetSpringHertz( b3RecMakeJointId( rdr, a->joint ), a->hertz );
+}
+
+static void b3RecDispatch_PogoJointSetSpringDampingRatio(
+	const b3RecArgs_PogoJointSetSpringDampingRatio* a, b3RecReader* rdr )
+{
+	b3PogoJoint_SetSpringDampingRatio( b3RecMakeJointId( rdr, a->joint ), a->dampingRatio );
+}
+
+static void b3RecDispatch_PogoJointSetMaxTensionForce(
+	const b3RecArgs_PogoJointSetMaxTensionForce* a, b3RecReader* rdr )
+{
+	b3PogoJoint_SetMaxTensionForce( b3RecMakeJointId( rdr, a->joint ), a->force );
+}
+
+static void b3RecDispatch_PogoJointSetMaxCompressionForce(
+	const b3RecArgs_PogoJointSetMaxCompressionForce* a, b3RecReader* rdr )
+{
+	b3PogoJoint_SetMaxCompressionForce( b3RecMakeJointId( rdr, a->joint ), a->force );
+}
+
+static void b3RecDispatch_PogoJointSetNormal( const b3RecArgs_PogoJointSetNormal* a, b3RecReader* rdr )
+{
+	b3PogoJoint_SetNormal( b3RecMakeJointId( rdr, a->joint ), a->normal );
+}
+
 static void b3RecDispatch_StateHash( const b3RecArgs_StateHash* a, b3RecReader* rdr )
 {
 	b3World* world = b3GetWorldFromId( rdr->replayWorldId );
 	uint64_t computed = b3HashWorldState( world );
 	if ( computed != a->hash )
 	{
-		printf( "b3ReplayFile: StateHash mismatch (recorded=0x%llX, computed=0x%llX)\n", (unsigned long long)a->hash,
-				(unsigned long long)computed );
+		printf( "b3ReplayFile: StateHash mismatch (recorded=0x%" PRIx64 ", computed=0x%" PRIx64 ")\n", a->hash, computed );
 		rdr->diverged = true;
 	}
 }
@@ -1908,7 +2039,8 @@ static bool b3RecReplayPlaneTrampoline( b3ShapeId id, const b3PlaneResult* plane
 		const b3RecRecordedHit* h = &rc->hits[rc->cursor + i];
 		if ( b3RecVec3Differs( h->plane.plane.normal, planes[i].plane.normal ) ||
 			 b3RecF32Differs( h->plane.plane.offset, planes[i].plane.offset ) ||
-			 b3RecVec3Differs( h->plane.point, planes[i].point ) )
+			 b3RecVec3Differs( h->plane.point, planes[i].point ) || h->plane.triangleIndex != planes[i].triangleIndex ||
+			 h->plane.childIndex != planes[i].childIndex || h->plane.materialIndex != planes[i].materialIndex )
 		{
 			rc->rdr->diverged = true;
 		}
@@ -1978,7 +2110,7 @@ static void b3RecComputeQueryBounds( b3RecDrawQuery* q )
 	// Sweep each point across the translation. A non-cast query has zero translation, so both ends
 	// coincide and the duplicates fold away.
 	b3Pos end = b3OffsetPos( q->origin, q->translation );
-	b3Vec3 world[2 * B3_MAX_SHAPE_CAST_POINTS];
+	b3Vec3 world[2 * B3_MAX_SHAPE_CAST_POINTS] = { 0 };
 	int n = 0;
 	for ( int i = 0; i < count; ++i )
 	{
@@ -2241,6 +2373,7 @@ static int b3RecDispatchOne( b3RecReader* rdr )
 	{
 		return -1;
 	}
+
 	int payloadStart = rdr->cursor;
 
 	switch ( opcode )
@@ -2281,7 +2414,7 @@ static int b3RecDispatchOne( b3RecReader* rdr )
 
 bool b3ValidateReplay( const void* data, int size, int workerCount )
 {
-	b3RecPlayer* player = b3RecPlayer_Create( data, size, workerCount );
+	b3RecPlayer* player = b3CreatePlayer( data, size, workerCount );
 	if ( player == NULL )
 	{
 		return false;
@@ -2296,7 +2429,7 @@ bool b3ValidateReplay( const void* data, int size, int workerCount )
 	}
 
 	bool ok = player->rdr.ok && player->rdr.diverged == false;
-	b3RecPlayer_Destroy( player );
+	b3DestroyPlayer( player );
 	return ok;
 }
 
@@ -2485,14 +2618,14 @@ static void b3RecLoadTags( b3RecReader* rdr, const uint8_t* rp, const uint8_t* d
 		{
 			break;
 		}
-		int n = len > B3_BODY_NAME_LENGTH ? B3_BODY_NAME_LENGTH : (int)len;
+		int n = len > B3_MAX_QUERY_NAME_LENGTH ? B3_MAX_QUERY_NAME_LENGTH : (int)len;
 		tags[loaded].key = key;
 		tags[loaded].id = id;
 		if ( n > 0 )
 		{
-			memcpy( tags[loaded].name, sub.data + sub.cursor, (size_t)n );
+			memcpy( tags[loaded].queryName, sub.data + sub.cursor, (size_t)n );
 		}
-		tags[loaded].name[n] = '\0';
+		tags[loaded].queryName[n] = '\0';
 		sub.cursor += len;
 		b3RecTagLookup_insert( map, key, loaded );
 		loaded += 1;
@@ -2502,6 +2635,24 @@ static void b3RecLoadTags( b3RecReader* rdr, const uint8_t* rp, const uint8_t* d
 	rdr->tagCount = (int)loaded;
 	rdr->tagCapacity = (int)count;
 	rdr->tagMap = map;
+}
+
+// Free slots loaded by b3RecLoadSlots.
+static void b3RecFreeSlots( b3RegistrySlot* slots, int slotCount )
+{
+	if ( slots == NULL )
+	{
+		return;
+	}
+	for ( int i = 0; i < slotCount; ++i )
+	{
+		b3RegistrySlot* slot = slots + i;
+		if ( slot->bytes != NULL )
+		{
+			b3Free( slot->bytes, (size_t)slot->byteCount );
+		}
+	}
+	b3Free( slots, (size_t)slotCount * sizeof( b3RegistrySlot ) );
 }
 
 // Load the trailing registry block and fill rdr->slots/slotCount, then the optional tag table.
@@ -2557,78 +2708,49 @@ static bool b3RecLoadSlots( b3RecReader* rdr, const void* data, int size, uint64
 		if ( rp + 5 > dataEnd )
 		{
 			printf( "b3ReplayFile: registry truncated at entry %u\n", i );
-			for ( uint32_t j = 0; j < i; ++j )
-			{
-				if ( slots[j].bytes != NULL )
-				{
-					b3Free( slots[j].bytes, (size_t)slots[j].byteCount );
-				}
-			}
-			b3Free( slots, (size_t)count * sizeof( b3RegistrySlot ) );
+			b3RecFreeSlots( slots, (int)count );
 			return false;
 		}
 		uint8_t kind = rp[0];
 		uint32_t byteCount = (uint32_t)rp[1] | ( (uint32_t)rp[2] << 8 ) | ( (uint32_t)rp[3] << 16 ) | ( (uint32_t)rp[4] << 24 );
 		rp += 5;
-		if ( rp + byteCount > dataEnd )
+		const char* error = NULL;
+		if ( byteCount == 0 || byteCount > INT32_MAX )
 		{
-			printf( "b3ReplayFile: registry entry %u bytes out of bounds\n", i );
-			for ( uint32_t j = 0; j < i; ++j )
+			error = "has an invalid byte count";
+		}
+		else if ( (size_t)byteCount > (size_t)( dataEnd - rp ) )
+		{
+			error = "bytes out of bounds";
+		}
+		else
+		{
+			uint8_t* bytes = (uint8_t*)b3Alloc( (size_t)byteCount );
+			memcpy( bytes, rp, (size_t)byteCount );
+			slots[i].kind = (b3GeometryKind)kind;
+			slots[i].byteCount = (int)byteCount;
+			slots[i].bytes = bytes;
+
+			// Validate the compound.
+			// todo validate other types?
+			if ( kind == b3_geometryCompound && b3ValidateCompound( bytes, (int)byteCount ) == NULL )
 			{
-				if ( slots[j].bytes != NULL )
-				{
-					b3Free( slots[j].bytes, (size_t)slots[j].byteCount );
-				}
+				error = "is not a valid compound";
 			}
-			b3Free( slots, (size_t)count * sizeof( b3RegistrySlot ) );
+		}
+		if ( error != NULL )
+		{
+			printf( "b3ReplayFile: registry entry %u %s\n", i, error );
+			b3RecFreeSlots( slots, (int)count );
 			return false;
 		}
-		uint8_t* bytes = (uint8_t*)b3Alloc( byteCount > 0 ? (size_t)byteCount : 1u );
-		if ( byteCount > 0 )
-		{
-			memcpy( bytes, rp, (size_t)byteCount );
-		}
 		rp += byteCount;
-		slots[i].kind = (b3GeometryKind)kind;
-		slots[i].byteCount = (int)byteCount;
-		slots[i].bytes = bytes;
-		slots[i].live = NULL;
 	}
 
 	rdr->slots = slots;
 	rdr->slotCount = (int)count;
 	b3RecLoadTags( rdr, rp, dataEnd );
 	return true;
-}
-
-// Free slots loaded by b3RecLoadSlots.
-static void b3RecFreeSlots( b3RegistrySlot* slots, int slotCount )
-{
-	if ( slots == NULL )
-	{
-		return;
-	}
-	for ( int i = 0; i < slotCount; ++i )
-	{
-		b3RegistrySlot* slot = slots + i;
-		if ( slot->live != NULL )
-		{
-			switch ( slot->kind )
-			{
-				// Mesh and height field have no separate live object; they borrow the bytes freed below.
-				case b3_geometryCompound:
-					b3Free( slot->live, (size_t)slot->byteCount );
-					break;
-				default:
-					break;
-			}
-		}
-		if ( slot->bytes != NULL )
-		{
-			b3Free( slot->bytes, slot->byteCount > 0 ? (size_t)slot->byteCount : 1u );
-		}
-	}
-	b3Free( slots, (size_t)slotCount * sizeof( b3RegistrySlot ) );
 }
 
 // Walk the op stream once without dispatching: count Step ops and grab the first step's tuning.
@@ -2698,15 +2820,8 @@ static void b3RecSeedKeyframeRegistry( b3RecPlayer* player )
 	for ( int i = 0; i < player->rdr.slotCount; ++i )
 	{
 		b3RegistrySlot* slot = player->rdr.slots + i;
-		// Copy so the registry can take ownership.
-		int n = slot->byteCount > 0 ? slot->byteCount : 1;
-		uint8_t* copy = (uint8_t*)b3Alloc( (size_t)n );
-		if ( slot->byteCount > 0 )
-		{
-			memcpy( copy, slot->bytes, (size_t)slot->byteCount );
-		}
-		uint64_t h = b3Hash64Blob( slot->bytes, slot->byteCount );
-		uint32_t id = b3AppendGeometry( reg, slot->kind, h, copy, slot->byteCount );
+		uint64_t h = b3Hash64NonZero( slot->bytes, slot->byteCount );
+		uint32_t id = b3AppendGeometry( reg, slot->kind, h, slot->bytes, slot->byteCount );
 		// Seeding in order without dedup keeps id == slot index.
 		B3_ASSERT( id == (uint32_t)i );
 		(void)id;
@@ -2720,12 +2835,12 @@ static void b3RecCaptureKeyframe( b3RecPlayer* player )
 	b3World* world = b3GetWorldFromId( player->rdr.replayWorldId );
 	b3RecBuffer buf = { 0 };
 
-	int regCountBefore = player->keyframeRec->registry.count;
+	int regCountBefore = player->keyframeRec->registry.entries.count;
 	B3_UNUSED( regCountBefore );
 
 	b3SerializeWorld( world, &buf, player->keyframeRec );
 	// Registry must not grow: all geometry was pre-seeded and the registry dedups exactly.
-	B3_ASSERT( player->keyframeRec->registry.count == regCountBefore );
+	B3_ASSERT( player->keyframeRec->registry.entries.count == regCountBefore );
 
 	size_t bodyBytes = (size_t)player->bodyIdCount * sizeof( b3BodyId );
 	size_t newBytes = (size_t)buf.capacity + bodyBytes;
@@ -2804,6 +2919,7 @@ static void b3RecPlayerRestoreKeyframe( b3RecPlayer* player, const b3RecKeyframe
 	player->frame = kf->frame;
 	player->divergeFrame = kf->divergeFrame;
 	player->atEnd = false;
+	player->atPreStep = false;
 
 	// Restore the outliner list verbatim so ordinals match this frame.
 	b3RecGrow( (void**)&player->bodyIds, &player->bodyIdCap, kf->bodyIdCount, 0, (int)sizeof( b3BodyId ) );
@@ -2828,7 +2944,7 @@ static b3WorldId b3RecPlayerCreateWorld( const b3RecPlayer* player )
 	return b3CreateWorld( &worldDef );
 }
 
-b3RecPlayer* b3RecPlayer_Create( const void* data, int size, int workerCount )
+b3RecPlayer* b3CreatePlayer( const void* data, int size, int workerCount )
 {
 	if ( data == NULL || size < (int)sizeof( b3RecHeader ) )
 	{
@@ -2885,10 +3001,10 @@ b3RecPlayer* b3RecPlayer_Create( const void* data, int size, int workerCount )
 	int registryEnd = (int)registryEnd64;
 
 	// Own a private copy so the caller can free their buffer right away.
-	uint8_t* copy = (uint8_t*)b3Alloc( (size_t)size );
+	uint8_t* copy = b3Alloc( (size_t)size );
 	memcpy( copy, data, (size_t)size );
 
-	b3RecPlayer* player = (b3RecPlayer*)b3Alloc( sizeof( b3RecPlayer ) );
+	b3RecPlayer* player = b3Alloc( sizeof( b3RecPlayer ) );
 	memset( player, 0, sizeof( b3RecPlayer ) );
 
 	player->data = copy;
@@ -2903,6 +3019,7 @@ b3RecPlayer* b3RecPlayer_Create( const void* data, int size, int workerCount )
 	player->recordedSubStepCount = 0;
 	player->recordedWorkerCount = workerCount;
 	player->atEnd = false;
+	player->atPreStep = false;
 	player->divergeFrame = -1;
 	player->keyframeMinInterval = B3_REC_KEYFRAME_INTERVAL_DEFAULT;
 	player->keyframeInterval = B3_REC_KEYFRAME_INTERVAL_DEFAULT;
@@ -2981,7 +3098,7 @@ b3RecPlayer* b3RecPlayer_Create( const void* data, int size, int workerCount )
 	return player;
 }
 
-void b3RecPlayer_Destroy( b3RecPlayer* player )
+void b3DestroyPlayer( b3RecPlayer* player )
 {
 	if ( player == NULL )
 	{
@@ -2993,7 +3110,7 @@ void b3RecPlayer_Destroy( b3RecPlayer* player )
 		b3DestroyWorld( player->rdr.replayWorldId );
 	}
 
-	// Free live geometry after destroying the world (slot->live may be used by the world).
+	// Free shape data.
 	b3RecFreeSlots( player->rdr.slots, player->rdr.slotCount );
 
 	// Free reader scratch.
@@ -3067,6 +3184,9 @@ void b3RecPlayer_Destroy( b3RecPlayer* player )
 
 bool b3RecPlayer_StepFrame( b3RecPlayer* player )
 {
+	// This is never true when full stepping
+	player->atPreStep = false;
+
 	if ( player->atEnd )
 	{
 		return false;
@@ -3128,6 +3248,91 @@ bool b3RecPlayer_StepFrame( b3RecPlayer* player )
 	}
 }
 
+void b3RecPlayer_SubStepFrame( b3RecPlayer* player )
+{
+	if ( player->atEnd )
+	{
+		return;
+	}
+
+	// Reset the per-frame query store before this frame's records are dispatched.
+	if ( player->atPreStep == false )
+	{
+		player->frameQueryCount = 0;
+		player->frameHitCount = 0;
+	}
+
+	// A frame is its leading inputs (queries and between-step mutators), one Step, and the Step's
+	// trailing StateHash. Queries are recorded before the Step they belong to, so they stash here
+	// against the world state they were computed for.
+	bool stepped = false;
+	bool haveCreateBodyOp = false;
+	for ( ;; )
+	{
+		if ( player->rdr.cursor >= player->registryEnd || !player->rdr.ok )
+		{
+			player->atEnd = true;
+			player->atPreStep = false;
+			return;
+		}
+
+		// Once stepped, the StateHash is the only record still belonging to this frame. Anything else
+		// begins the next frame, so stop and let the next StepFrame consume it. Capture a keyframe at
+		// the boundary.
+		uint8_t currentOpCode = player->rdr.data[player->rdr.cursor];
+		if ( stepped && currentOpCode != b3_recOpStateHash )
+		{
+			if ( player->frame > player->lastKeyframeFrame && player->frame % player->keyframeInterval == 0 )
+			{
+				b3RecCaptureKeyframe( player );
+			}
+			return;
+		}
+
+		if ( player->atPreStep == false && haveCreateBodyOp == true && currentOpCode == b3_recOpStep )
+		{
+			player->atPreStep = true;
+			return;
+		}
+
+		int op = b3RecDispatchOne( &player->rdr );
+		if ( op < 0 )
+		{
+			player->atEnd = true;
+			player->atPreStep = false;
+			return;
+		}
+		if ( op == b3_recOpDestroyWorld ) // end of recording
+		{
+			player->atEnd = true;
+			player->atPreStep = false;
+			return;
+		}
+
+		if ( op == b3_recOpCreateBody )
+		{
+			B3_ASSERT( player->atPreStep == false );
+			haveCreateBodyOp = true;
+		}
+
+		if ( op == b3_recOpStep )
+		{
+			player->atPreStep = false;
+			player->frame += 1;
+			stepped = true;
+		}
+		else if ( op == b3_recOpStateHash ) // trailing record of the frame just stepped
+		{
+			// Latch the first frame whose state hash diverged. The hash belongs to the frame Step just
+			// advanced, so latch against the current frame, not the next Step which would be one late.
+			if ( player->divergeFrame < 0 && player->rdr.diverged )
+			{
+				player->divergeFrame = player->frame;
+			}
+		}
+	}
+}
+
 void b3RecPlayer_Restart( b3RecPlayer* player )
 {
 	// Restore the frame-0 image in place so the replay world id stays stable across a restart or
@@ -3144,6 +3349,7 @@ void b3RecPlayer_Restart( b3RecPlayer* player )
 	player->frame = 0;
 	player->divergeFrame = -1;
 	player->atEnd = false;
+	player->atPreStep = false;
 
 	// Frame 0 is the pre-step snapshot with no recorded queries, so clear the per-frame store. This
 	// keeps the last stepped frame's queries from lingering on a restart or a backward scrub to 0.
@@ -3165,6 +3371,9 @@ void b3RecPlayer_SeekFrame( b3RecPlayer* player, int targetFrame )
 	{
 		return;
 	}
+
+	player->atPreStep = false;
+
 	if ( targetFrame < 0 )
 	{
 		targetFrame = 0;
@@ -3222,6 +3431,11 @@ int b3RecPlayer_GetFrameCount( const b3RecPlayer* player )
 bool b3RecPlayer_IsAtEnd( const b3RecPlayer* player )
 {
 	return player != NULL ? player->atEnd : true;
+}
+
+bool b3RecPlayer_IsAtPreStep( const b3RecPlayer* player )
+{
+	return player != NULL ? player->atPreStep : false;
 }
 
 bool b3RecPlayer_HasDiverged( const b3RecPlayer* player )
@@ -3468,7 +3682,7 @@ void b3RecPlayer_DrawFrameQueries( b3RecPlayer* player, b3DebugDraw* draw, int q
 			{
 				b3Pos c1 = b3OffsetPos( q->origin, q->mover.center1 );
 				b3Pos c2 = b3OffsetPos( q->origin, q->mover.center2 );
-				b3HexColor c = q->kind == b3_colorLightSkyBlue;
+				b3HexColor c = b3_colorLightSkyBlue;
 				if ( draw->DrawCapsuleFcn )
 				{
 					draw->DrawCapsuleFcn( c1, c2, q->mover.radius, b3RecQuerySelColor( selected, c ), 0.6f, draw->context );
@@ -3488,7 +3702,7 @@ void b3RecPlayer_DrawFrameQueries( b3RecPlayer* player, b3DebugDraw* draw, int q
 			{
 				b3Pos c1 = b3OffsetPos( q->origin, q->mover.center1 );
 				b3Pos c2 = b3OffsetPos( q->origin, q->mover.center2 );
-				b3HexColor c = q->kind == b3_colorTan;
+				b3HexColor c = b3_colorTan;
 				if ( draw->DrawCapsuleFcn )
 				{
 					draw->DrawCapsuleFcn( c1, c2, q->mover.radius, b3RecQuerySelColor( selected, c ), 0.6f, draw->context );
@@ -3539,22 +3753,22 @@ void b3RecPlayer_DrawFrameQueries( b3RecPlayer* player, b3DebugDraw* draw, int q
 				if ( b3RecTagLookup_is_end( it ) == false )
 				{
 					const b3RecTag* tag = &player->rdr.tags[it.data->val];
-					name = tag->name;
+					name = tag->queryName;
 					id = tag->id;
 				}
 			}
 			char label[64];
 			if ( name != NULL && name[0] != '\0' && id != 0 )
 			{
-				snprintf( label, sizeof( label ), "%s (%llu)", name, (unsigned long long)id );
+				snprintf( label, sizeof( label ), "%.40s (%" PRIu64 ")", name, id );
 			}
 			else if ( name != NULL && name[0] != '\0' )
 			{
-				snprintf( label, sizeof( label ), "%s", name );
+				snprintf( label, sizeof( label ), "%.40s", name );
 			}
 			else
 			{
-				snprintf( label, sizeof( label ), "#%llu", (unsigned long long)id );
+				snprintf( label, sizeof( label ), "#%" PRIu64, id );
 			}
 			b3Pos labelPos = q->origin;
 			if ( q->kind == B3_RECQ_OVERLAP_AABB )
@@ -3610,7 +3824,7 @@ b3RecQueryInfo b3RecPlayer_GetFrameQuery( const b3RecPlayer* player, int index )
 			const b3RecTag* tag = &player->rdr.tags[it.data->val];
 			info.id = tag->id;
 			// An id-only tag interns an empty name; report it as none so the viewer shows the id alone.
-			info.name = tag->name[0] != '\0' ? tag->name : NULL;
+			info.name = tag->queryName[0] != '\0' ? tag->queryName : NULL;
 		}
 	}
 	return info;
