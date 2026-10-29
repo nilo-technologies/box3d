@@ -992,8 +992,8 @@ static int SleepTest( void )
 	return 0;
 }
 
-// Reads the bulk wheel data and checks every wheel against the per wheel getters. Returns the
-// number of wheels with each flag set.
+// Reads the bulk wheel data and checks every wheel against the per wheel getters. Returns 0 when
+// every check passes, and the number of wheels with each flag set through the counts.
 static int CheckWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int* contactCount, int* stickyCount )
 {
 	int count = b3Vehicle_GetWheelData( vehicleId, data, B3_MAX_VEHICLE_WHEELS );
