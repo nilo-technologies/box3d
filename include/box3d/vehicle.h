@@ -470,80 +470,6 @@ typedef struct b3VehicleWheelState
 	bool isSticky;
 } b3VehicleWheelState;
 
-/// Bits in b3VehicleWheelData::flags
-typedef enum b3VehicleWheelFlags
-{
-	b3_vehicleWheelContact = 0x1,
-	b3_vehicleWheelSticky = 0x2,
-} b3VehicleWheelFlags;
-
-/// Wheel state and transform packed for bulk reads, see b3Vehicle_GetWheelData. Every field is
-/// 4 bytes except the trailing 8 byte userMaterialId, so the record has no padding and a fixed
-/// 120 byte (30 word) layout. Words are little endian, as on wasm, x86 and ARM. From JavaScript,
-/// view the output with a Float32Array for the floats and a Uint32Array over the same memory for
-/// the flags and ids. The comments give the word offset of each field. Without contact the
-/// contact point, normal, ground shape and material are zero.
-typedef struct b3VehicleWheelData
-{
-	/// [0] Wheel center in world space, as b3Vehicle_GetWheelTransform. Rounded to float in
-	/// double precision builds.
-	b3Vec3 position;
-
-	/// [3] Wheel rotation in world space as x, y, z, w
-	b3Quat rotation;
-
-	/// [7] Contact point in world space, rounded to float in double precision builds
-	b3Vec3 contactPoint;
-
-	/// [10]
-	b3Vec3 contactNormal;
-
-	/// [13] Attachment point to wheel center (m)
-	float suspensionLength;
-
-	/// [14] 0 fully extended, 1 at the bump stop
-	float compression;
-
-	/// [15] Normal force (N)
-	float load;
-
-	/// [16] Forward tire force on the chassis (N)
-	float longitudinalForce;
-
-	/// [17] Lateral tire force on the chassis (N)
-	float lateralForce;
-
-	/// [18]
-	float slipRatio;
-
-	/// [19] Radians
-	float slipAngle;
-
-	/// [20] Spin (rad/s)
-	float angularVelocity;
-
-	/// [21] Accumulated spin angle for visuals (radians)
-	float rotationAngle;
-
-	/// [22] Steer angle, positive left (radians)
-	float steerAngle;
-
-	/// [23]
-	float driveTorque;
-
-	/// [24]
-	float brakeTorque;
-
-	/// [25] b3VehicleWheelFlags
-	uint32_t flags;
-
-	/// [26] index1 as int32, then [27] world0 in the low 16 bits and generation in the high 16 bits
-	b3ShapeId groundShapeId;
-
-	/// [28] low 32 bits, [29] high 32 bits
-	uint64_t userMaterialId;
-} b3VehicleWheelData;
-
 B3_API b3VehicleDef b3DefaultVehicleDef( void );
 B3_API b3VehicleWheelDef b3DefaultVehicleWheelDef( void );
 
@@ -592,10 +518,6 @@ B3_API b3VehicleWheelState b3Vehicle_GetWheelState( b3VehicleId vehicleId, int w
 /// Wheel center and orientation in world space, including steering and spin. The wheel's
 /// axle is the chassis local axis up x forward.
 B3_API b3WorldTransform b3Vehicle_GetWheelTransform( b3VehicleId vehicleId, int wheelIndex );
-
-/// Writes the state and world transform of every wheel into data, in wheel order, in one call.
-/// Writes at most capacity records and returns the number written, 0 for a negative capacity.
-B3_API int b3Vehicle_GetWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int capacity );
 
 /// Sprung mass carried by a wheel's suspension (kg)
 B3_API float b3Vehicle_GetSprungMass( b3VehicleId vehicleId, int wheelIndex );

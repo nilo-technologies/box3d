@@ -15,7 +15,6 @@
 #include "box3d/box3d.h"
 
 #include <float.h>
-#include <stddef.h>
 
 #define B3_VEHICLE_REFERENCE_FRICTION 0.6f
 #define B3_RPM_TO_RADIANS ( 2.0f * B3_PI / 60.0f )
@@ -699,17 +698,6 @@ b3VehicleInput b3Vehicle_GetInput( b3VehicleId vehicleId )
 	return b3GetVehicle( vehicleId )->input;
 }
 
-// Fully extended with no ground, so the readouts never report a stale contact
-static void b3ClearWheelContact( b3VehicleWheel* wheel )
-{
-	wheel->hasContact = false;
-	wheel->suspensionLength = wheel->def.suspension.maxLength;
-	wheel->contactPoint = b3Pos_zero;
-	wheel->contactNormal = b3Vec3_zero;
-	wheel->groundShapeId = b3_nullShapeId;
-	wheel->userMaterialId = 0;
-}
-
 static void b3ShiftTo( b3Vehicle* v, int gear )
 {
 	if ( v->gear == gear )
@@ -748,7 +736,8 @@ void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
 		b3VehicleWheel* wheel = v->wheels + i;
 		wheel->omega = 0.0f;
 		wheel->stickyTimer = 0.0f;
-		b3ClearWheelContact( wheel );
+		wheel->hasContact = false;
+		wheel->suspensionLength = wheel->def.suspension.maxLength;
 		if ( b3IsJointIdValidInternal( world, wheel->jointId ) )
 		{
 			b3Joint* joint = b3GetJointFullId( world, wheel->jointId );
@@ -905,31 +894,13 @@ b3VehicleState b3Vehicle_GetState( b3VehicleId vehicleId )
 	return state;
 }
 
-static float b3GetWheelCompression( const b3VehicleWheel* wheel )
+b3VehicleWheelState b3Vehicle_GetWheelState( b3VehicleId vehicleId, int wheelIndex )
 {
+	b3Vehicle* v = b3GetVehicle( vehicleId );
+	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
+	b3VehicleWheel* wheel = v->wheels + b3ClampInt( wheelIndex, 0, v->wheelCount - 1 );
 	const b3VehicleSuspension* s = &wheel->def.suspension;
-	float travel = s->maxLength - s->minLength;
-	return travel > 0.0f ? b3ClampFloat( ( s->maxLength - wheel->suspensionLength ) / travel, 0.0f, 1.0f ) : 0.0f;
-}
 
-static b3WorldTransform b3GetWheelTransform( const b3Vehicle* v, const b3VehicleWheel* wheel, b3WorldTransform chassis )
-{
-	b3Vec3 up = v->chassis.up;
-	b3Vec3 axle = b3Cross( up, v->chassis.forward );
-	b3Vec3 localCenter = b3MulSub( wheel->def.position, wheel->suspensionLength, up );
-	b3Quat steer = b3MakeQuatFromAxisAngle( up, wheel->steerAngle );
-	b3Quat spin = b3MakeQuatFromAxisAngle( axle, wheel->rotationAngle );
-	b3Quat localRotation = b3MulQuat( steer, spin );
-
-	b3WorldTransform result;
-	result.p = b3TransformWorldPoint( chassis, localCenter );
-	result.q = b3MulQuat( chassis.q, localRotation );
-	return result;
-}
-
-// The one place the wheel readout is built, b3Vehicle_GetWheelData packs this
-static b3VehicleWheelState b3MakeWheelState( const b3VehicleWheel* wheel )
-{
 	b3VehicleWheelState state = { 0 };
 	state.hasContact = wheel->hasContact;
 	state.contactPoint = wheel->contactPoint;
@@ -937,7 +908,8 @@ static b3VehicleWheelState b3MakeWheelState( const b3VehicleWheel* wheel )
 	state.groundShapeId = wheel->groundShapeId;
 	state.userMaterialId = wheel->userMaterialId;
 	state.suspensionLength = wheel->suspensionLength;
-	state.compression = b3GetWheelCompression( wheel );
+	float travel = s->maxLength - s->minLength;
+	state.compression = travel > 0.0f ? b3ClampFloat( ( s->maxLength - wheel->suspensionLength ) / travel, 0.0f, 1.0f ) : 0.0f;
 	state.load = wheel->load;
 	state.longitudinalForce = wheel->longitudinalForce;
 	state.lateralForce = wheel->lateralForce;
@@ -952,81 +924,24 @@ static b3VehicleWheelState b3MakeWheelState( const b3VehicleWheel* wheel )
 	return state;
 }
 
-b3VehicleWheelState b3Vehicle_GetWheelState( b3VehicleId vehicleId, int wheelIndex )
-{
-	b3Vehicle* v = b3GetVehicle( vehicleId );
-	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
-	return b3MakeWheelState( v->wheels + b3ClampInt( wheelIndex, 0, v->wheelCount - 1 ) );
-}
-
 b3WorldTransform b3Vehicle_GetWheelTransform( b3VehicleId vehicleId, int wheelIndex )
 {
 	b3Vehicle* v = b3GetVehicle( vehicleId );
 	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
 	b3VehicleWheel* wheel = v->wheels + b3ClampInt( wheelIndex, 0, v->wheelCount - 1 );
-	return b3GetWheelTransform( v, wheel, b3Body_GetTransform( v->chassisId ) );
-}
 
-// Every documented word offset, JavaScript readers hard code them
-#define B3_CHECK_WHEEL_WORD( field, word )                                                                                       \
-	_Static_assert( offsetof( b3VehicleWheelData, field ) == ( word ) * 4, "wheel data layout is part of the API" )
-B3_CHECK_WHEEL_WORD( position, 0 );
-B3_CHECK_WHEEL_WORD( rotation, 3 );
-B3_CHECK_WHEEL_WORD( contactPoint, 7 );
-B3_CHECK_WHEEL_WORD( contactNormal, 10 );
-B3_CHECK_WHEEL_WORD( suspensionLength, 13 );
-B3_CHECK_WHEEL_WORD( compression, 14 );
-B3_CHECK_WHEEL_WORD( load, 15 );
-B3_CHECK_WHEEL_WORD( longitudinalForce, 16 );
-B3_CHECK_WHEEL_WORD( lateralForce, 17 );
-B3_CHECK_WHEEL_WORD( slipRatio, 18 );
-B3_CHECK_WHEEL_WORD( slipAngle, 19 );
-B3_CHECK_WHEEL_WORD( angularVelocity, 20 );
-B3_CHECK_WHEEL_WORD( rotationAngle, 21 );
-B3_CHECK_WHEEL_WORD( steerAngle, 22 );
-B3_CHECK_WHEEL_WORD( driveTorque, 23 );
-B3_CHECK_WHEEL_WORD( brakeTorque, 24 );
-B3_CHECK_WHEEL_WORD( flags, 25 );
-B3_CHECK_WHEEL_WORD( groundShapeId, 26 );
-B3_CHECK_WHEEL_WORD( userMaterialId, 28 );
-_Static_assert( sizeof( b3VehicleWheelData ) == 30 * 4, "wheel data layout is part of the API" );
-#undef B3_CHECK_WHEEL_WORD
+	b3Vec3 up = v->chassis.up;
+	b3Vec3 axle = b3Cross( up, v->chassis.forward );
+	b3Vec3 localCenter = b3MulSub( wheel->def.position, wheel->suspensionLength, up );
+	b3Quat steer = b3MakeQuatFromAxisAngle( up, wheel->steerAngle );
+	b3Quat spin = b3MakeQuatFromAxisAngle( axle, wheel->rotationAngle );
+	b3Quat localRotation = b3MulQuat( steer, spin );
 
-int b3Vehicle_GetWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int capacity )
-{
-	b3Vehicle* v = b3GetVehicle( vehicleId );
-	int count = b3ClampInt( capacity, 0, v->wheelCount );
 	b3WorldTransform chassis = b3Body_GetTransform( v->chassisId );
-
-	for ( int i = 0; i < count; ++i )
-	{
-		const b3VehicleWheel* wheel = v->wheels + i;
-		b3VehicleWheelState state = b3MakeWheelState( wheel );
-		b3WorldTransform xf = b3GetWheelTransform( v, wheel, chassis );
-
-		b3VehicleWheelData* out = data + i;
-		out->position = (b3Vec3){ (float)xf.p.x, (float)xf.p.y, (float)xf.p.z };
-		out->rotation = xf.q;
-		out->contactPoint = (b3Vec3){ (float)state.contactPoint.x, (float)state.contactPoint.y, (float)state.contactPoint.z };
-		out->contactNormal = state.contactNormal;
-		out->suspensionLength = state.suspensionLength;
-		out->compression = state.compression;
-		out->load = state.load;
-		out->longitudinalForce = state.longitudinalForce;
-		out->lateralForce = state.lateralForce;
-		out->slipRatio = state.slipRatio;
-		out->slipAngle = state.slipAngle;
-		out->angularVelocity = state.angularVelocity;
-		out->rotationAngle = state.rotationAngle;
-		out->steerAngle = state.steerAngle;
-		out->driveTorque = state.driveTorque;
-		out->brakeTorque = state.brakeTorque;
-		out->flags = ( state.hasContact ? b3_vehicleWheelContact : 0u ) | ( state.isSticky ? b3_vehicleWheelSticky : 0u );
-		out->groundShapeId = state.groundShapeId;
-		out->userMaterialId = state.userMaterialId;
-	}
-
-	return count;
+	b3WorldTransform result;
+	result.p = b3TransformWorldPoint( chassis, localCenter );
+	result.q = b3MulQuat( chassis.q, localRotation );
+	return result;
 }
 
 float b3Vehicle_GetSprungMass( b3VehicleId vehicleId, int wheelIndex )
@@ -1470,7 +1385,9 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 
 	if ( ctx.hit == false )
 	{
-		b3ClearWheelContact( wheel );
+		wheel->hasContact = false;
+		wheel->suspensionLength = s->maxLength;
+		wheel->groundShapeId = b3_nullShapeId;
 		return;
 	}
 
