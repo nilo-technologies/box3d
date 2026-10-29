@@ -262,6 +262,42 @@ static float LaunchSlip( bool tractionControl )
 	return maxSlip;
 }
 
+// Full throttle at full lock from 70 km/h. Returns the largest chassis sideslip angle in degrees.
+static float PowerOversteer( bool tractionControl )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.assists.tractionControl = tractionControl;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	Step( worldId, 60 );
+
+	int maxGear = 0;
+	bool inOrder;
+	float maxSideslip = -1.0f;
+	if ( AccelerateTo( worldId, vehicleId, 70.0f * KMH, 30.0f, &maxGear, &inOrder ) > 0.0f )
+	{
+		maxSideslip = 0.0f;
+		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .steer = 1.0f } );
+		for ( int i = 0; i < 240; ++i )
+		{
+			Step( worldId, 1 );
+			b3Vec3 v = b3Body_GetLinearVelocity( chassisId );
+			b3Vec3 forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
+			float speed = sqrtf( v.x * v.x + v.z * v.z );
+			if ( speed > 1.0f )
+			{
+				float sideslip = atan2f( forward.x * v.z - forward.z * v.x, forward.x * v.x + forward.z * v.z );
+				maxSideslip = b3MaxFloat( maxSideslip, fabsf( sideslip ) * 180.0f / B3_PI );
+			}
+		}
+	}
+
+	b3DestroyWorld( worldId );
+	return maxSideslip;
+}
+
 static int TractionControlTest( void )
 {
 	float with = LaunchSlip( true );
@@ -269,6 +305,13 @@ static int TractionControlTest( void )
 	printf( "    launch slip ratio %.2f with traction control, %.2f without\n", with, without );
 	ENSURE( with < 0.15f );
 	ENSURE( without > 1.0f );
+
+	float cornerWith = PowerOversteer( true );
+	float cornerWithout = PowerOversteer( false );
+	printf( "    full throttle at full lock: sideslip %.1f deg with traction control, %.1f deg without\n", cornerWith,
+			cornerWithout );
+	ENSURE( cornerWith >= 0.0f && cornerWith < 15.0f );
+	ENSURE( cornerWithout > 30.0f );
 	return 0;
 }
 

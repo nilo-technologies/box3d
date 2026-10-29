@@ -1640,6 +1640,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	float gripX[B3_MAX_VEHICLE_WHEELS];
 	float gripY[B3_MAX_VEHICLE_WHEELS];
 	float peakTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
+	float tractionTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
+	b3Vec3 localCenter = b3Body_GetLocalCenter( v->chassisId );
 	for ( int i = 0; i < wheelCount; ++i )
 	{
 		b3VehicleWheel* wheel = v->wheels + i;
@@ -1739,6 +1741,19 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		gripX[i] = peakX;
 		gripY[i] = peakY;
 		peakTorque[i] = ground * tire->longitudinalPeakFriction * wheel->load * def->radius;
+
+		// On wheels behind the center of mass, traction control leaves room on the friction ellipse
+		// for the cornering force the tire carried last step, so full throttle mid corner does not
+		// spin the car. Extra drive on the front wheels only widens the line, so they keep the full
+		// peak. At least 30% of the peak is always allowed so the car can pull out of a corner.
+		tractionTorque[i] = peakTorque[i];
+		if ( b3Dot( b3Sub( def->position, localCenter ), v->chassis.forward ) < 0.0f )
+		{
+			float lateralCapacity = peakY * wheel->load;
+			float lateralUse =
+				lateralCapacity > 0.0f ? b3MinFloat( b3AbsFloat( wheel->lateralForce ) / lateralCapacity, 1.0f ) : 0.0f;
+			tractionTorque[i] *= b3MaxFloat( sqrtf( 1.0f - lateralUse * lateralUse ), 0.3f );
+		}
 	}
 
 	// Implicit engine, clutch and driven wheel solve. The ground reaction from the previous step
@@ -1799,7 +1814,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 				float g = b3AbsFloat( shares[i] * ratio );
 				if ( g > 0.0f && v->wheels[i].hasContact )
 				{
-					limit = b3MinFloat( limit, peakTorque[i] / g );
+					limit = b3MinFloat( limit, tractionTorque[i] / g );
 				}
 			}
 
@@ -1848,7 +1863,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			float torque = shares[i] * ratio * clutchTorque;
 			if ( v->assists.tractionControl && wheel->hasContact && torque > 0.0f )
 			{
-				torque = b3MinFloat( torque, peakTorque[i] );
+				torque = b3MinFloat( torque, tractionTorque[i] );
 			}
 			wheel->driveTorque = torque;
 		}
