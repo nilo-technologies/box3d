@@ -201,7 +201,8 @@ typedef struct b3VehicleEngine
 
 typedef enum b3VehicleTransmissionMode
 {
-	/// Shifts by rpm. Pressing reverse while stopped selects reverse.
+	/// Shifts by rpm. Pressing reverse while stopped selects reverse. See also
+	/// b3VehicleAssists::brakeReverse.
 	b3_vehicleTransmissionAuto,
 
 	/// Use b3Vehicle_SetGear
@@ -356,6 +357,10 @@ typedef struct b3VehicleAssists
 
 	/// Time below the sticky speed before it engages (s)
 	float stickyTime;
+
+	/// With the automatic gearbox and no forward input, the brake selects reverse and drives
+	/// backward once stopped. Off, the brake only brakes and holds the car still.
+	bool brakeReverse;
 } b3VehicleAssists;
 
 /// Vehicle definition. Use b3DefaultVehicleDef to initialize. The default is a 1300 kg rear
@@ -388,7 +393,8 @@ typedef struct b3VehicleInput
 	/// first and selects reverse once stopped.
 	float forward;
 
-	/// 0 to 1
+	/// 0 to 1. With the automatic gearbox and b3VehicleAssists::brakeReverse, it also selects
+	/// reverse once stopped when there is no forward input.
 	float brake;
 
 	/// -1 full left, 1 full right
@@ -478,8 +484,8 @@ typedef enum b3VehicleWheelFlags
 } b3VehicleWheelFlags;
 
 /// Wheel state and transform packed for bulk reads, see b3Vehicle_GetWheelData. Every field is
-/// 4 bytes except the trailing 8 byte userMaterialId, so the record has no padding and a fixed
-/// 120 byte (30 word) layout. Words are little endian, as on wasm, x86 and ARM. From JavaScript,
+/// made of 4 byte words, and the only 8 byte fields, groundShapeId and userMaterialId, come last,
+/// so the record has no padding and a fixed 120 byte (30 word) layout. Words are little endian, as on wasm, x86 and ARM. From JavaScript,
 /// view the output with a Float32Array for the floats and a Uint32Array over the same memory for
 /// the flags and ids. The comments give the word offset of each field. Without contact the
 /// contact point, normal, ground shape and material are zero.

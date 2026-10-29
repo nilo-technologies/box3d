@@ -166,6 +166,7 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	def.assists.stickyTire = true;
 	def.assists.stickySpeed = 0.25f;
 	def.assists.stickyTime = 0.0f;
+	def.assists.brakeReverse = true;
 
 	def.internalValue = B3_SECRET_COOKIE;
 	return def;
@@ -1046,18 +1047,22 @@ typedef struct b3WheelCastContext
 	float minSlopeCos;
 
 	bool hit;
-	bool degenerate;
 	float fraction;
 	b3Pos point;
 	b3Vec3 normal;
 	b3ShapeId shapeId;
 	uint64_t userMaterialId;
+	int triangleIndex;
+	int childIndex;
+
+	// Closest hit the shape cast could not resolve, it may be in front of the accepted hit
+	bool degenerate;
+	float degenerateFraction;
 } b3WheelCastContext;
 
 static float b3WheelCastCallback( b3ShapeId shapeId, b3Pos point, b3Vec3 normal, float fraction, uint64_t userMaterialId,
 								  int triangleIndex, int childIndex, void* context )
 {
-	B3_UNUSED( triangleIndex, childIndex );
 	b3WheelCastContext* ctx = context;
 	b3Shape* shape = b3Array_Get( ctx->world->shapes, shapeId.index1 - 1 );
 	if ( shape->bodyId == ctx->chassisBodyId || shape->sensorIndex != B3_NULL_INDEX )
@@ -1069,8 +1074,12 @@ static float b3WheelCastCallback( b3ShapeId shapeId, b3Pos point, b3Vec3 normal,
 	{
 		if ( fraction > 0.0f )
 		{
-			// The shape cast did not converge, the caller falls back to a ray
-			ctx->degenerate = true;
+			// The shape cast did not converge, the caller falls back to a ray if nothing closer was hit
+			if ( ctx->degenerate == false || fraction < ctx->degenerateFraction )
+			{
+				ctx->degenerate = true;
+				ctx->degenerateFraction = fraction;
+			}
 			return -1.0f;
 		}
 
@@ -1089,6 +1098,8 @@ static float b3WheelCastCallback( b3ShapeId shapeId, b3Pos point, b3Vec3 normal,
 	ctx->normal = normal;
 	ctx->shapeId = shapeId;
 	ctx->userMaterialId = userMaterialId;
+	ctx->triangleIndex = triangleIndex;
+	ctx->childIndex = childIndex;
 	return fraction;
 }
 
@@ -1286,6 +1297,14 @@ static void b3UpdateGearbox( b3Vehicle* v, float dt, float shiftRpm, bool blockU
 
 	if ( t->mode == b3_vehicleTransmissionAuto )
 	{
+		// Without forward input the brake can double as reverse: it brakes while moving forward and
+		// selects reverse and drives backward once below the switch speed
+		if ( v->assists.brakeReverse && forward == 0.0f && brake > 0.0f )
+		{
+			forward = -brake;
+			brake = 0.0f;
+		}
+
 		if ( forward > 0.0f )
 		{
 			if ( v->gear < 0 && v->speed < -switchSpeed )
@@ -1404,7 +1423,8 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 	}
 	else
 	{
-		// The ray starts at the wheel center and ends one radius below full extension
+		// The ray shares the shape cast's start and ends one radius below full extension, where the
+		// tire bottom is
 		endLength = s->maxLength + radius;
 		contactOffset = radius;
 	}
@@ -1433,13 +1453,27 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 		}
 	}
 
-	if ( ctx.hit == false && ctx.degenerate )
+	// A degenerate hit in front of the accepted one could be a thin obstacle the wheel would sink
+	// through, so retry with a ray. The ray is narrower than the wheel and can pass beside what the
+	// shape cast hit, so keep the shape hit unless the ray gives a shorter suspension.
+	if ( ctx.degenerate && ( ctx.hit == false || ctx.degenerateFraction < ctx.fraction ) )
 	{
-		endLength = s->maxLength + radius;
-		contactOffset = radius;
-		castLength = endLength - startLength;
+		b3WheelCastContext shapeHit = ctx;
+		float shapeLength = startLength + shapeHit.fraction * castLength - contactOffset;
+		float rayLength = s->maxLength + radius - startLength;
+		ctx.hit = false;
 		ctx.degenerate = false;
-		b3World_CastRay( worldId, origin, b3MulSV( castLength, down ), v->chassis.castFilter, b3WheelCastCallback, &ctx );
+		b3World_CastRay( worldId, origin, b3MulSV( rayLength, down ), v->chassis.castFilter, b3WheelCastCallback, &ctx );
+		float rayHitLength = startLength + ctx.fraction * rayLength - radius;
+		if ( ctx.hit && ( shapeHit.hit == false || rayHitLength < shapeLength ) )
+		{
+			castLength = rayLength;
+			contactOffset = radius;
+		}
+		else
+		{
+			ctx = shapeHit;
+		}
 	}
 
 	frame->groundBodyId = anchorId;
@@ -1469,7 +1503,9 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 		frame->groundBodyId = (b3BodyId){ groundBody->id + 1, world->worldId, groundBody->generation };
 	}
 
-	frame->groundScale = b3GetShapeMaterials( shape )[0].friction / B3_VEHICLE_REFERENCE_FRICTION;
+	// The material of the hit triangle or compound child, not just the shape's first material
+	int materialIndex = b3GetShapeMaterialIndex( shape, ctx.childIndex, ctx.triangleIndex );
+	frame->groundScale = b3GetShapeMaterials( shape )[materialIndex].friction / B3_VEHICLE_REFERENCE_FRICTION;
 	frame->cosAngle = b3MaxFloat( b3Dot( ctx.normal, up ), 0.1f );
 }
 
@@ -1725,6 +1761,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	float peakTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	float tractionTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	b3Vec3 localCenter = b3Body_GetLocalCenter( v->chassisId );
+	float gravity = b3GravityLength( world );
 	for ( int i = 0; i < wheelCount; ++i )
 	{
 		b3VehicleWheel* wheel = v->wheels + i;
@@ -1750,6 +1787,11 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			wheel->brakeTorque = brakeTorque;
 			continue;
 		}
+
+		// The load is the previous step's solver result, which is zero on the step a wheel touches
+		// down and the first step after creation. The static weight stands in until then, so ABS and
+		// traction control do not drop the brake and drive torque to zero on landing.
+		float load = wheel->load > 0.0f ? wheel->load : wheel->sprungMass * gravity * frame->cosAngle;
 
 		b3Vec3 vc = b3Body_GetWorldPointVelocity( v->chassisId, wheel->contactPoint );
 		b3Vec3 vg = b3Vec3_zero;
@@ -1806,7 +1848,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			muY = ground * tire->lateralPeakFriction;
 			peakX = ground * tire->longitudinalPeakFriction;
 			peakY = muY;
-			float holdTorque = b3MaxFloat( def->maxBrakeTorque, 2.0f * wheel->load * def->radius + 100.0f );
+			float holdTorque = b3MaxFloat( def->maxBrakeTorque, 2.0f * load * def->radius + 100.0f );
 			brakeTorque = b3MaxFloat( brakeTorque, holdTorque );
 		}
 
@@ -1814,16 +1856,16 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		// settles near the peak slip instead of locking
 		if ( v->assists.abs && serviceTorque > 0.0f && wheel->isSticky == false )
 		{
-			float limit = ground * tire->longitudinalPeakFriction * wheel->load * def->radius;
+			float limit = ground * tire->longitudinalPeakFriction * load * def->radius;
 			brakeTorque -= serviceTorque - b3MinFloat( serviceTorque, limit );
 		}
 
-		brakeTorque += tire->rollingResistance * wheel->load * def->radius;
+		brakeTorque += tire->rollingResistance * load * def->radius;
 		wheel->brakeTorque = brakeTorque;
 		frictionY[i] = muY;
 		gripX[i] = peakX;
 		gripY[i] = peakY;
-		peakTorque[i] = ground * tire->longitudinalPeakFriction * wheel->load * def->radius;
+		peakTorque[i] = ground * tire->longitudinalPeakFriction * load * def->radius;
 
 		// On wheels behind the center of mass, traction control leaves room on the friction ellipse
 		// for the cornering force the tire carried last step, so full throttle mid corner does not
@@ -1832,10 +1874,19 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		tractionTorque[i] = peakTorque[i];
 		if ( b3Dot( b3Sub( def->position, localCenter ), v->chassis.forward ) < 0.0f )
 		{
-			float lateralCapacity = peakY * wheel->load;
+			float lateralCapacity = peakY * load;
 			float lateralUse =
 				lateralCapacity > 0.0f ? b3MinFloat( b3AbsFloat( wheel->lateralForce ) / lateralCapacity, 1.0f ) : 0.0f;
 			tractionTorque[i] *= b3MaxFloat( sqrtf( 1.0f - lateralUse * lateralUse ), 0.3f );
+		}
+
+		// Past the peak slip the tire only transmits the sliding grip, which is less than the peak
+		// torque above, so a wheel that already broke loose (for example from the load moving off it
+		// faster than last step's load shows) would keep spinning. Cut its drive until it grips again.
+		float driveSign = v->gear < 0 ? -1.0f : 1.0f;
+		if ( driveSign * wheel->slipRatio > tire->longitudinalPeakSlip )
+		{
+			tractionTorque[i] = b3MinFloat( tractionTorque[i], 0.5f * peakX * load * def->radius );
 		}
 	}
 
@@ -1944,9 +1995,12 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		{
 			b3VehicleWheel* wheel = v->wheels + i;
 			float torque = shares[i] * ratio * clutchTorque;
-			if ( v->assists.tractionControl && wheel->hasContact && torque > 0.0f )
+
+			// Drive torque has the sign of the gear ratio, so this also caps reverse. Engine braking
+			// has the opposite sign and is left alone.
+			if ( v->assists.tractionControl && wheel->hasContact && torque * ratio > 0.0f )
 			{
-				torque = b3MinFloat( torque, tractionTorque[i] );
+				torque = b3MinFloat( b3AbsFloat( torque ), tractionTorque[i] ) * ( ratio > 0.0f ? 1.0f : -1.0f );
 			}
 			wheel->driveTorque = torque;
 		}

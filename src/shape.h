@@ -103,6 +103,7 @@ b3AABB b3ComputeSweptShapeAABB( const b3Shape* shape, const b3Sweep* sweep, floa
 b3Vec3 b3GetShapeCentroid( const b3Shape* shape );
 float b3GetShapeArea( const b3Shape* shape );
 float b3GetShapeProjectedArea( const b3Shape* shape, b3Vec3 planeNormal );
+int b3GetShapeMaterialIndex( const b3Shape* shape, int childIndex, int triangleIndex );
 uint64_t b3GetShapeUserMaterialId( const b3Shape* shape, int childIndex, int triangleIndex );
 
 b3ShapeProxy b3MakeShapeProxy( const b3Shape* shape );

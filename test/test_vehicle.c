@@ -229,15 +229,16 @@ static int AccelerationTest( void )
 	ENSURE( VehicleIsFinite( vehicleId ) );
 
 	// Keeps driving straight
-	b3Vec3 p = b3Body_GetPosition( b3Vehicle_GetChassisBody( vehicleId ) );
+	b3Vec3 p = b3ToVec3( b3Body_GetPosition( b3Vehicle_GetChassisBody( vehicleId ) ) );
 	ENSURE( fabsf( p.x ) < 1.0f );
 
 	b3DestroyWorld( worldId );
 	return 0;
 }
 
-// A full throttle launch from rest, with and without traction control
-static float LaunchSlip( bool tractionControl )
+// A full throttle launch from rest, with and without traction control. forward is 1 to launch
+// forward and -1 to launch in reverse. Returns the largest driven wheel slip in that direction.
+static float LaunchSlip( bool tractionControl, float forward )
 {
 	b3WorldId worldId = CreateVehicleWorld( 1 );
 	CreateFlatGround( worldId );
@@ -246,7 +247,7 @@ static float LaunchSlip( bool tractionControl )
 	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = forward } );
 	float maxSlip = 0.0f;
 	for ( int i = 0; i < 120; ++i )
 	{
@@ -254,7 +255,7 @@ static float LaunchSlip( bool tractionControl )
 		for ( int j = 2; j < 4; ++j )
 		{
 			float sr = b3Vehicle_GetWheelState( vehicleId, j ).slipRatio;
-			maxSlip = b3MaxFloat( maxSlip, sr );
+			maxSlip = b3MaxFloat( maxSlip, forward * sr );
 		}
 	}
 
@@ -300,11 +301,20 @@ static float PowerOversteer( bool tractionControl )
 
 static int TractionControlTest( void )
 {
-	float with = LaunchSlip( true );
-	float without = LaunchSlip( false );
+	float with = LaunchSlip( true, 1.0f );
+	float without = LaunchSlip( false, 1.0f );
 	printf( "    launch slip ratio %.2f with traction control, %.2f without\n", with, without );
 	ENSURE( with < 0.15f );
 	ENSURE( without > 1.0f );
+
+	// Reverse drive torque is negative, the cap must still apply. Launching backward moves load off
+	// the driven rear wheels faster than the cap sees it, so a wheel can break loose for a step
+	// before traction control cuts its drive.
+	float reverseWith = LaunchSlip( true, -1.0f );
+	float reverseWithout = LaunchSlip( false, -1.0f );
+	printf( "    reverse launch slip ratio %.2f with traction control, %.2f without\n", reverseWith, reverseWithout );
+	ENSURE( reverseWith < 0.3f );
+	ENSURE( reverseWithout > 1.0f );
 
 	float cornerWith = PowerOversteer( true );
 	float cornerWithout = PowerOversteer( false );
@@ -334,7 +344,7 @@ static float BrakingDistance( bool abs )
 		return -1.0f;
 	}
 
-	b3Vec3 start = b3Body_GetPosition( chassisId );
+	b3Vec3 start = b3ToVec3( b3Body_GetPosition( chassisId ) );
 	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
 	float elapsed = 0.0f;
 	while ( b3Vehicle_GetState( vehicleId ).speed > 0.05f && elapsed < 20.0f )
@@ -344,7 +354,7 @@ static float BrakingDistance( bool abs )
 	}
 
 	bool finite = VehicleIsFinite( vehicleId );
-	b3Vec3 end = b3Body_GetPosition( chassisId );
+	b3Vec3 end = b3ToVec3( b3Body_GetPosition( chassisId ) );
 	b3DestroyWorld( worldId );
 	return finite ? b3Distance( start, end ) : -1.0f;
 }
@@ -449,9 +459,9 @@ static float SlopeDrift( float angleDegrees, bool sideways, float handbrake )
 
 	// Settle, then measure the drift
 	Step( worldId, 120 );
-	b3Vec3 start = b3Body_GetPosition( chassisId );
+	b3Vec3 start = b3ToVec3( b3Body_GetPosition( chassisId ) );
 	Step( worldId, 300 );
-	b3Vec3 end = b3Body_GetPosition( chassisId );
+	b3Vec3 end = b3ToVec3( b3Body_GetPosition( chassisId ) );
 
 	float drift = VehicleIsFinite( vehicleId ) ? b3Distance( start, end ) : FLT_MAX;
 	b3DestroyWorld( worldId );
@@ -502,7 +512,7 @@ static int DynamicGroundTest( void )
 	// Dynamic slab in front. Its contact force with the ground grows by the car's weight.
 	bodyDef = b3DefaultBodyDef();
 	bodyDef.type = b3_dynamicBody;
-	b3Vec3 carPosition = b3Body_GetPosition( chassisId );
+	b3Vec3 carPosition = b3ToVec3( b3Body_GetPosition( chassisId ) );
 	bodyDef.position = (b3Pos){ carPosition.x, 0.1f, 12.0f };
 	b3BodyId slabId = b3CreateBody( worldId, &bodyDef );
 	b3BoxHull slab = b3MakeBoxHull( 3.0f, 0.1f, 4.0f );
@@ -518,7 +528,7 @@ static int DynamicGroundTest( void )
 	float slabPush = 0.0f;
 	for ( int i = 0; i < 600; ++i )
 	{
-		b3Vec3 p = b3Body_GetPosition( chassisId );
+		b3Vec3 p = b3ToVec3( b3Body_GetPosition( chassisId ) );
 		float forward = p.z < 12.0f ? 0.4f : -1.0f;
 		if ( onSlab )
 		{
@@ -868,9 +878,11 @@ static float RideHeightAt( float dt, int substeps )
 	{
 		b3World_Step( worldId, dt, substeps );
 	}
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	// Brake, then hold with the handbrake near a stop, since the brake selects reverse once stopped
 	for ( int i = 0; i < 2 * steps; ++i )
 	{
+		bool fast = b3Vehicle_GetState( vehicleId ).speed > 2.0f;
+		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
 		b3World_Step( worldId, dt, substeps );
 	}
 
@@ -972,8 +984,13 @@ static int SleepTest( void )
 	Step( worldId, 60 );
 	ENSURE( b3Vehicle_GetState( vehicleId ).speed > 1.0f );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
-	Step( worldId, 120 );
+	// Brake, then hold with the handbrake near a stop, since the brake selects reverse once stopped
+	for ( int i = 0; i < 120; ++i )
+	{
+		bool fast = b3Vehicle_GetState( vehicleId ).speed > 2.0f;
+		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
+		Step( worldId, 1 );
+	}
 	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ 0 } );
 	Step( worldId, 300 );
 	ENSURE( b3Body_IsAwake( chassisId ) == false );
@@ -982,8 +999,8 @@ static int SleepTest( void )
 	return 0;
 }
 
-// Reads the bulk wheel data and checks every wheel against the per wheel getters. Returns the
-// number of wheels with each flag set.
+// Reads the bulk wheel data and checks every wheel against the per wheel getters. Returns 0 when
+// every check passes, and the number of wheels with each flag set through the counts.
 static int CheckWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int* contactCount, int* stickyCount )
 {
 	int count = b3Vehicle_GetWheelData( vehicleId, data, B3_MAX_VEHICLE_WHEELS );
@@ -1075,12 +1092,168 @@ static int WheelDataTest( void )
 	return 0;
 }
 
+// Speed after one second of full throttle on a flat mesh whose right half (x > 0), where the car
+// sits, uses a second material with the given friction. The left half keeps friction 0.6.
+static float MeshMaterialLaunchSpeed( float rightFriction )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+
+	b3Vec3 vertices[6] = {
+		{ -200.0f, 0.0f, -200.0f }, { 0.0f, 0.0f, -200.0f }, { 200.0f, 0.0f, -200.0f },
+		{ -200.0f, 0.0f, 200.0f },	{ 0.0f, 0.0f, 200.0f },	 { 200.0f, 0.0f, 200.0f },
+	};
+	int32_t indices[12] = { 0, 3, 4, 0, 4, 1, 1, 4, 5, 1, 5, 2 };
+	uint8_t materialIndices[4] = { 0, 0, 1, 1 };
+
+	b3MeshDef meshDef = { 0 };
+	meshDef.vertices = vertices;
+	meshDef.indices = indices;
+	meshDef.materialIndices = materialIndices;
+	meshDef.vertexCount = 6;
+	meshDef.triangleCount = 4;
+	b3MeshData* mesh = b3CreateMesh( &meshDef, NULL, 0 );
+
+	b3SurfaceMaterial materials[2] = { b3DefaultSurfaceMaterial(), b3DefaultSurfaceMaterial() };
+	materials[0].friction = 0.6f;
+	materials[1].friction = rightFriction;
+
+	b3BodyDef bodyDef = b3DefaultBodyDef();
+	b3BodyId groundId = b3CreateBody( worldId, &bodyDef );
+	b3ShapeDef shapeDef = b3DefaultShapeDef();
+	shapeDef.materials = materials;
+	shapeDef.materialCount = 2;
+	b3CreateMeshShape( groundId, &shapeDef, mesh, (b3Vec3){ 1.0f, 1.0f, 1.0f } );
+
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 20.0f, 0.6f, 0.0f }, NULL );
+	Step( worldId, 120 );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	Step( worldId, 60 );
+	float speed = b3Vehicle_GetState( vehicleId ).speed;
+
+	b3DestroyWorld( worldId );
+	b3DestroyMesh( mesh );
+	return speed;
+}
+
+// Wheels use the friction of the triangle they touch, not the shape's first material
+static int MeshMaterialTest( void )
+{
+	float grip = MeshMaterialLaunchSpeed( 0.6f );
+	float ice = MeshMaterialLaunchSpeed( 0.1f );
+	printf( "    speed after 1 s: %.2f m/s on friction 0.6, %.2f m/s on friction 0.1\n", grip, ice );
+	ENSURE( grip > 3.0f );
+	ENSURE( ice < 0.5f * grip );
+	return 0;
+}
+
+// With ABS on, the service brake holds on the first step a wheel touches down, before the solver
+// has reported any load for it
+static int TouchdownBrakeTest( void )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.assists.abs = true;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 2.0f, 0.0f }, &def );
+
+	// Moving, so the sticky tire does not engage and hold the wheels instead of ABS
+	b3Body_SetLinearVelocity( b3Vehicle_GetChassisBody( vehicleId ), (b3Vec3){ 0.0f, 0.0f, 15.0f } );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+
+	bool touched = false;
+	for ( int i = 0; i < 120 && touched == false; ++i )
+	{
+		Step( worldId, 1 );
+		for ( int j = 0; j < 4; ++j )
+		{
+			b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, j );
+			if ( ws.hasContact )
+			{
+				printf( "    wheel %d first contact: load %.0f N, brake %.0f N*m, sticky %d\n", j, ws.load, ws.brakeTorque,
+						ws.isSticky );
+				ENSURE( ws.isSticky == false );
+				ENSURE( ws.brakeTorque > 500.0f );
+				touched = true;
+			}
+		}
+	}
+
+	ENSURE( touched );
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
+// With the automatic gearbox and the brake reverse assist, the brake slows the car in a forward
+// gear, then selects reverse and drives backward once stopped
+static int BrakeReverseTest( void )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	Step( worldId, 60 );
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	Step( worldId, 180 );
+	ENSURE( b3Vehicle_GetState( vehicleId ).speed > 5.0f );
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	bool reversed = false;
+	float minSpeed = FLT_MAX;
+	for ( int i = 0; i < 600; ++i )
+	{
+		Step( worldId, 1 );
+		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		minSpeed = b3MinFloat( minSpeed, state.speed );
+		if ( state.speed > 2.0f )
+		{
+			// Still braking, not driving
+			ENSURE( state.gear > 0 );
+			ENSURE( state.brake == 1.0f && state.throttle == 0.0f );
+		}
+		else if ( state.gear < 0 )
+		{
+			reversed = true;
+		}
+	}
+
+	b3VehicleState state = b3Vehicle_GetState( vehicleId );
+	printf( "    brake reverse: gear %d, speed %.2f m/s, throttle %.2f\n", state.gear, minSpeed, state.throttle );
+	ENSURE( reversed );
+	ENSURE( state.gear == -1 );
+	ENSURE( state.brake == 0.0f && state.throttle == 1.0f );
+	ENSURE( minSpeed < -2.0f );
+
+	// With forward input the brake stays a brake
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .brake = 1.0f } );
+	Step( worldId, 1 );
+	ENSURE( b3Vehicle_GetState( vehicleId ).brake == 1.0f );
+
+	// With the assist off the brake holds the car still
+	b3VehicleAssists assists = b3Vehicle_GetAssists( vehicleId );
+	ENSURE( assists.brakeReverse );
+	assists.brakeReverse = false;
+	b3Vehicle_SetAssists( vehicleId, assists );
+	b3Vehicle_Reset( vehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	Step( worldId, 180 );
+	state = b3Vehicle_GetState( vehicleId );
+	printf( "    brake reverse off: gear %d, speed %.3f m/s\n", state.gear, state.speed );
+	ENSURE( state.gear > 0 );
+	ENSURE( state.brake == 1.0f && state.throttle == 0.0f );
+	ENSURE( fabsf( state.speed ) < 0.05f );
+
+	ENSURE( VehicleIsFinite( vehicleId ) );
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
 int VehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
 	RUN_SUBTEST( AccelerationTest );
 	RUN_SUBTEST( TractionControlTest );
 	RUN_SUBTEST( BrakingTest );
+	RUN_SUBTEST( BrakeReverseTest );
 	RUN_SUBTEST( TurningTest );
 	RUN_SUBTEST( AntiRollTest );
 	RUN_SUBTEST( SlopeHoldTest );
@@ -1093,5 +1266,7 @@ int VehicleTest( void )
 	RUN_SUBTEST( LiveSettingsTest );
 	RUN_SUBTEST( SleepTest );
 	RUN_SUBTEST( WheelDataTest );
+	RUN_SUBTEST( MeshMaterialTest );
+	RUN_SUBTEST( TouchdownBrakeTest );
 	return 0;
 }

@@ -2484,12 +2484,12 @@ b3TOIOutput b3ShapeTimeOfImpact( b3Shape* shapeA, b3Shape* shapeB, b3Sweep* swee
 	return output;
 }
 
-// Resolve the user material id for a hit point on the given shape. Mesh/heightfield shapes
-// use the manifold-point triangleIndex to pick a per-triangle material. Compound shapes use
-// the contact's childIndex to find the participating child, then for a mesh child apply the
-// child's materialIndices indirection on top of the per-triangle index. Convex shapes fall
-// back to materials[0]. childIndex is unused for non-compound shapes.
-uint64_t b3GetShapeUserMaterialId( const b3Shape* shape, int childIndex, int triangleIndex )
+// Resolve the index into the shape's materials for a hit point on the given shape. Mesh/heightfield
+// shapes use the triangleIndex of the manifold point or cast hit to pick a per-triangle material.
+// Compound shapes use the childIndex to find the participating child, then for a mesh child apply
+// the child's materialIndices indirection on top of the per-triangle index. Convex shapes use
+// material 0. childIndex is unused for non-compound shapes.
+int b3GetShapeMaterialIndex( const b3Shape* shape, int childIndex, int triangleIndex )
 {
 	if ( shape->materialCount == 0 )
 	{
@@ -2525,6 +2525,16 @@ uint64_t b3GetShapeUserMaterialId( const b3Shape* shape, int childIndex, int tri
 		}
 	}
 
-	materialIndex = b3ClampInt( materialIndex, 0, shape->materialCount - 1 );
-	return b3GetShapeMaterials( shape )[materialIndex].userMaterialId;
+	return b3ClampInt( materialIndex, 0, shape->materialCount - 1 );
+}
+
+// The user material id of the material b3GetShapeMaterialIndex picks
+uint64_t b3GetShapeUserMaterialId( const b3Shape* shape, int childIndex, int triangleIndex )
+{
+	if ( shape->materialCount == 0 )
+	{
+		return 0;
+	}
+
+	return b3GetShapeMaterials( shape )[b3GetShapeMaterialIndex( shape, childIndex, triangleIndex )].userMaterialId;
 }
