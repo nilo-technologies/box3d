@@ -587,6 +587,24 @@ b3JointId b3CreatePogoJoint( b3WorldId worldId, const b3PogoJointDef* def )
 	return jointId;
 }
 
+b3JointId b3CreateVehicleWheelJointInternal( b3World* world, b3BodyId chassisId, b3BodyId groundId )
+{
+	B3_ASSERT( world->locked == false );
+
+	b3JointDef def = b3DefaultJointDef();
+	def.bodyIdA = chassisId;
+	def.bodyIdB = groundId;
+
+	// The chassis must keep colliding with whatever the wheels touch
+	def.collideConnected = true;
+
+	b3JointPair pair = b3CreateJoint( world, &def, b3_vehicleWheelJoint );
+	b3JointSim* joint = pair.jointSim;
+	joint->vehicleWheelJoint = (b3VehicleWheelJoint){ 0 };
+
+	return (b3JointId){ joint->jointId + 1, world->worldId, pair.joint->generation };
+}
+
 b3JointId b3CreateFilterJoint( b3WorldId worldId, const b3FilterJointDef* def )
 {
 	B3_CHECK_JOINT_DEF( def );
@@ -1220,6 +1238,16 @@ void b3GetJointReaction( b3World* world, b3JointSim* sim, float invTimeStep, flo
 		}
 		break;
 
+		case b3_vehicleWheelJoint:
+		{
+			b3VehicleWheelJoint* joint = &sim->vehicleWheelJoint;
+			float normalImpulse = joint->springImpulse + joint->bumpImpulse;
+			linearImpulse = sqrtf( normalImpulse * normalImpulse +
+								   joint->longitudinalImpulse * joint->longitudinalImpulse +
+								   joint->lateralImpulse * joint->lateralImpulse );
+		}
+		break;
+
 		default:
 			break;
 	}
@@ -1267,6 +1295,9 @@ static b3Vec3 b3GetJointConstraintForce( b3World* world, b3Joint* joint )
 		case b3_pogoJoint:
 			return b3GetPogoJointForce( world, base );
 
+		case b3_vehicleWheelJoint:
+			return b3GetVehicleWheelJointForce( world, base );
+
 		default:
 			B3_ASSERT( false );
 			return b3Vec3_zero;
@@ -1308,6 +1339,7 @@ static b3Vec3 b3GetJointConstraintTorque( b3World* world, b3Joint* joint )
 
 		case b3_moverJoint:
 		case b3_pogoJoint:
+		case b3_vehicleWheelJoint:
 			return b3Vec3_zero;
 
 		default:
@@ -1382,6 +1414,9 @@ float b3Joint_GetLinearSeparation( b3JointId jointId )
 			return 0.0f;
 
 		case b3_pogoJoint:
+			return 0.0f;
+
+		case b3_vehicleWheelJoint:
 			return 0.0f;
 
 		case b3_filterJoint:
@@ -1492,6 +1527,9 @@ float b3Joint_GetAngularSeparation( b3JointId jointId )
 			return 0.0f;
 
 		case b3_pogoJoint:
+			return 0.0f;
+
+		case b3_vehicleWheelJoint:
 			return 0.0f;
 
 		case b3_filterJoint:
@@ -1654,6 +1692,10 @@ void b3PrepareJoint( b3JointSim* joint, b3StepContext* context )
 			b3PreparePogoJoint( joint, context );
 			break;
 
+		case b3_vehicleWheelJoint:
+			b3PrepareVehicleWheelJoint( joint, context );
+			break;
+
 		default:
 			B3_ASSERT( false );
 	}
@@ -1704,6 +1746,10 @@ void b3WarmStartJoint( b3JointSim* joint, b3StepContext* context )
 
 		case b3_pogoJoint:
 			b3WarmStartPogoJoint( joint, context );
+			break;
+
+		case b3_vehicleWheelJoint:
+			b3WarmStartVehicleWheelJoint( joint, context );
 			break;
 
 		default:
@@ -1758,6 +1804,10 @@ void b3SolveJoint( b3JointSim* joint, b3StepContext* context, bool useBias )
 
 		case b3_pogoJoint:
 			b3SolvePogoJoint( joint, context, useBias );
+			break;
+
+		case b3_vehicleWheelJoint:
+			b3SolveVehicleWheelJoint( joint, context, useBias );
 			break;
 
 		default:
@@ -1884,6 +1934,10 @@ void b3DrawJoint( b3DebugDraw* draw, b3World* world, b3Joint* joint )
 			b3DrawPogoJoint( draw, world, jointSim, transformA, transformB, scale );
 			break;
 
+		case b3_vehicleWheelJoint:
+			b3DrawVehicleWheelJoint( draw, world, jointSim, transformA, transformB );
+			break;
+
 		default:
 			draw->DrawSegmentFcn( transformA.p, pA, color, draw->context );
 			draw->DrawSegmentFcn( pA, pB, color, draw->context );
@@ -1910,7 +1964,8 @@ void b3DrawJoint( b3DebugDraw* draw, b3World* world, b3Joint* joint )
 		}
 	}
 
-	if ( draw->drawJointExtras && joint->type != b3_moverJoint && joint->type != b3_pogoJoint )
+	if ( draw->drawJointExtras && joint->type != b3_moverJoint && joint->type != b3_pogoJoint &&
+		 joint->type != b3_vehicleWheelJoint )
 	{
 		b3Vec3 force = b3GetJointConstraintForce( world, joint );
 		b3Vec3 torque = b3GetJointConstraintTorque( world, joint );

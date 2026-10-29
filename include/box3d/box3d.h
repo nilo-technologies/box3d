@@ -8,6 +8,7 @@
 #include "id.h"
 #include "math_functions.h"
 #include "types.h"
+#include "vehicle.h"
 
 #include <stdbool.h>
 

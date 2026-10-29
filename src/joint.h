@@ -154,6 +154,63 @@ typedef struct b3PogoJoint
 	float velocity;
 } b3PogoJoint;
 
+// One per vehicle wheel, from the chassis (A) to the ground body (B). The vehicle pre-step
+// writes the contact geometry, tire limits and drive/brake torques every step; the rows are
+// solved every substep. Plain data only: joint sims are memcpy'd between sets.
+typedef struct b3VehicleWheelJoint
+{
+	// World axes at the contact, fixed for the step. normal points from ground to chassis.
+	b3Vec3 normal;
+	b3Vec3 forward;
+	b3Vec3 lateral;
+
+	// Offset added to the chassis anchor for the lateral row (roll influence)
+	b3Vec3 rollOffset;
+
+	// Position errors along the normal at the start of the step
+	float springC;
+	float bumpC;
+
+	float stiffness;
+	float compressionDamping;
+	float reboundDamping;
+
+	float radius;
+	float invInertia;
+	float driveTorque;
+	float brakeTorque;
+
+	// Lateral friction coefficient at the current slip angle, the row limit is this times the
+	// normal impulse
+	float lateralFriction;
+
+	// Friction ellipse radii: the peak friction until the slip passes the peak, then falling to
+	// the sliding friction. longitudinalGrip is also the longitudinal row limit.
+	float longitudinalGrip;
+	float lateralGrip;
+
+	// Wheel spin relative to the chassis, positive rolls forward
+	float omega;
+
+	float springImpulse;
+	float bumpImpulse;
+	float longitudinalImpulse;
+	float lateralImpulse;
+	float brakeImpulse;
+
+	int indexA;
+	int indexB;
+	b3Vec3 anchorA;
+	b3Vec3 anchorB;
+	float normalMass;
+	float longitudinalMass;
+	float lockedMass;
+	float lateralMass;
+
+	bool hasContact;
+	bool enableBumpStop;
+} b3VehicleWheelJoint;
+
 typedef struct b3ParallelJoint
 {
 	float hertz;
@@ -377,6 +434,7 @@ typedef struct b3JointSim
 		b3PrismaticJoint prismaticJoint;
 		b3WeldJoint weldJoint;
 		b3WheelJoint wheelJoint;
+		b3VehicleWheelJoint vehicleWheelJoint;
 	};
 } b3JointSim;
 
@@ -407,6 +465,7 @@ b3Vec3 b3GetRevoluteJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetSphericalJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetWeldJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetWheelJointForce( b3World* world, b3JointSim* base );
+b3Vec3 b3GetVehicleWheelJointForce( b3World* world, b3JointSim* base );
 
 b3Vec3 b3GetMotorJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetParallelJointTorque( b3World* world, b3JointSim* base );
@@ -426,6 +485,7 @@ void b3PrepareRevoluteJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareSphericalJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareWeldJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareWheelJoint( b3JointSim* base, b3StepContext* context );
+void b3PrepareVehicleWheelJoint( b3JointSim* base, b3StepContext* context );
 
 void b3WarmStartDistanceJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartMotorJoint( b3JointSim* base, b3StepContext* context );
@@ -437,6 +497,7 @@ void b3WarmStartRevoluteJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartSphericalJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartWeldJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartWheelJoint( b3JointSim* base, b3StepContext* context );
+void b3WarmStartVehicleWheelJoint( b3JointSim* base, b3StepContext* context );
 
 void b3SolveDistanceJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveMotorJoint( b3JointSim* base, b3StepContext* context );
@@ -448,6 +509,7 @@ void b3SolveRevoluteJoint( b3JointSim* base, b3StepContext* context, bool useBia
 void b3SolveSphericalJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveWeldJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveWheelJoint( b3JointSim* base, b3StepContext* context, bool useBias );
+void b3SolveVehicleWheelJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 
 void b3DrawDistanceJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB );
 void b3DrawMoverJoint( b3DebugDraw* draw, b3World* world, b3JointSim* base, b3WorldTransform transformA,
@@ -460,6 +522,11 @@ void b3DrawRevoluteJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform 
 void b3DrawSphericalJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawWeldJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawWheelJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
+void b3DrawVehicleWheelJoint( b3DebugDraw* draw, b3World* world, b3JointSim* base, b3WorldTransform transformA,
+							  b3WorldTransform transformB );
+
+// Creates a vehicle wheel joint without recording. Only the vehicle module calls this.
+b3JointId b3CreateVehicleWheelJointInternal( b3World* world, b3BodyId chassisId, b3BodyId groundId );
 
 // K = [(1/m1 + 1/m2) * eye(2) - skew(r1) * invI1 * skew(r1) - skew(r2) * invI2 * skew(r2)]
 static inline b3Vec3 b3SolvePointConstraint( float mA, float mB, b3Matrix3 iA, b3Matrix3 iB, b3Vec3 rA, b3Vec3 rB, b3Vec3 rhs )
