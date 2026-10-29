@@ -27,7 +27,6 @@ typedef struct b3VehicleWheel
 	float rotationAngle;
 	float steerAngle;
 	float stickyTimer;
-	float tcScale;
 
 	// Last cast and solve results
 	b3Pos contactPoint;

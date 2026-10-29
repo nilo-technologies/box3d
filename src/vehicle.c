@@ -153,13 +153,13 @@ b3VehicleDef b3DefaultVehicleDef( void )
 
 	def.assists.counterSteer = 0.2f;
 	def.assists.driftGripScale = 1.0f;
-	def.assists.tractionControl = false;
+	def.assists.tractionControl = true;
 	def.assists.abs = false;
 	def.assists.downforce = 1.5f;
 	def.assists.drag = 0.6f;
 	def.assists.rollInfluence = 0.25f;
-	def.assists.airControl = 3.0f;
-	def.assists.airAngularDamping = 1.0f;
+	def.assists.airControl = 1.0f;
+	def.assists.airAngularDamping = 2.0f;
 	def.assists.selfRighting = 3.0f;
 	def.assists.maxTiltAngle = 0.0f;
 	def.assists.stickyTire = true;
@@ -561,7 +561,6 @@ b3VehicleId b3CreateVehicle( b3WorldId worldId, const b3VehicleDef* def )
 	{
 		b3VehicleWheel* wheel = v->wheels + i;
 		wheel->def = b3SanitizeWheel( def->wheels[i] );
-		wheel->tcScale = 1.0f;
 		wheel->suspensionLength = wheel->def.suspension.maxLength;
 		wheel->groundBodyId = anchorId;
 		wheel->jointId = b3CreateVehicleWheelJointInternal( world, v->chassisId, anchorId );
@@ -962,6 +961,7 @@ typedef struct b3WheelCastContext
 	float minSlopeCos;
 
 	bool hit;
+	bool degenerate;
 	float fraction;
 	b3Pos point;
 	b3Vec3 normal;
@@ -980,8 +980,15 @@ static float b3WheelCastCallback( b3ShapeId shapeId, b3Pos point, b3Vec3 normal,
 		return -1.0f;
 	}
 
-	if ( fraction == 0.0f && b3LengthSquared( normal ) < 0.25f )
+	if ( b3LengthSquared( normal ) < 0.25f )
 	{
+		if ( fraction > 0.0f )
+		{
+			// The shape cast did not converge, the caller falls back to a ray
+			ctx->degenerate = true;
+			return -1.0f;
+		}
+
 		// Started inside, there is no normal
 		normal = ctx->up;
 	}
@@ -1167,7 +1174,7 @@ static float b3GetGearRatio( const b3Vehicle* v )
 	return 0.0f;
 }
 
-static void b3UpdateGearbox( b3Vehicle* v, float dt, bool blockUpshift )
+static void b3UpdateGearbox( b3Vehicle* v, float dt, float shiftRpm, bool blockUpshift )
 {
 	const b3VehicleTransmission* t = &v->transmission;
 
@@ -1227,7 +1234,7 @@ static void b3UpdateGearbox( b3Vehicle* v, float dt, bool blockUpshift )
 
 		if ( v->gear > 0 && v->shiftTimer <= 0.0f && v->latencyTimer <= 0.0f )
 		{
-			float rpm = v->engineSpeed * B3_RADIANS_TO_RPM;
+			float rpm = shiftRpm;
 			if ( rpm > t->shiftUpRpm && v->gear < t->gearCount && blockUpshift == false && throttle > 0.0f )
 			{
 				b3ShiftTo( v, v->gear + 1 );
@@ -1329,8 +1336,25 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 	b3WorldId worldId = { (uint16_t)( world->worldId + 1 ), world->generation };
 	if ( castLength > 0.0f )
 	{
-		b3World_CastShape( worldId, origin, &proxy, b3MulSV( castLength, down ), v->chassis.castFilter,
-						   b3WheelCastCallback, &ctx );
+		if ( def->castType == b3_vehicleCastRay )
+		{
+			b3World_CastRay( worldId, origin, b3MulSV( castLength, down ), v->chassis.castFilter, b3WheelCastCallback,
+							 &ctx );
+		}
+		else
+		{
+			b3World_CastShape( worldId, origin, &proxy, b3MulSV( castLength, down ), v->chassis.castFilter,
+							   b3WheelCastCallback, &ctx );
+		}
+	}
+
+	if ( ctx.hit == false && ctx.degenerate )
+	{
+		endLength = s->maxLength + radius;
+		contactOffset = radius;
+		castLength = endLength - startLength;
+		ctx.degenerate = false;
+		b3World_CastRay( worldId, origin, b3MulSV( castLength, down ), v->chassis.castFilter, b3WheelCastCallback, &ctx );
 	}
 
 	frame->groundBodyId = anchorId;
@@ -1454,7 +1478,29 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		}
 	}
 
-	b3UpdateGearbox( v, dt, blockUpshift );
+	// Shift on the slower of the engine and the road speed, so wheels spinning in the air or in a
+	// burnout do not shift up
+	float shiftRpm = v->engineSpeed * B3_RADIANS_TO_RPM;
+	{
+		float radius = 0.0f;
+		float count = 0.0f;
+		for ( int i = 0; i < wheelCount; ++i )
+		{
+			if ( shares[i] > 0.0f )
+			{
+				radius += v->wheels[i].def.radius;
+				count += 1.0f;
+			}
+		}
+
+		if ( count > 0.0f )
+		{
+			float roadRpm = b3AbsFloat( v->speed * b3GetGearRatio( v ) ) * count / radius * B3_RADIANS_TO_RPM;
+			shiftRpm = b3MinFloat( shiftRpm, roadRpm );
+		}
+	}
+
+	b3UpdateGearbox( v, dt, shiftRpm, blockUpshift );
 	float throttle = v->throttle;
 	float brake = v->brake;
 	float handbrake = input->handbrake;
@@ -1590,10 +1636,10 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	}
 
 	// Slip, friction limits, brakes and sticky tires
-	float frictionX[B3_MAX_VEHICLE_WHEELS];
 	float frictionY[B3_MAX_VEHICLE_WHEELS];
 	float gripX[B3_MAX_VEHICLE_WHEELS];
 	float gripY[B3_MAX_VEHICLE_WHEELS];
+	float peakTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	for ( int i = 0; i < wheelCount; ++i )
 	{
 		b3VehicleWheel* wheel = v->wheels + i;
@@ -1605,7 +1651,6 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		float brakeTorque = serviceTorque + handbrake * def->maxHandBrakeTorque;
 		bool driven = shares[i] > 0.0f && throttle > 0.0f;
 
-		frictionX[i] = 0.0f;
 		frictionY[i] = 0.0f;
 		gripX[i] = 0.0f;
 		gripY[i] = 0.0f;
@@ -1637,8 +1682,6 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		wheel->slipAngle = b3Atan2( vLat, b3AbsFloat( vLong ) + 1.0f );
 
 		float ground = frame->groundScale;
-		float muX = ground * b3TireCurve( b3AbsFloat( wheel->slipRatio ), tire->longitudinalPeakSlip, tire->longitudinalPeakFriction,
-										  tire->longitudinalSlideSlip, tire->longitudinalSlideFriction );
 		float muY = ground * b3TireCurve( b3AbsFloat( wheel->slipAngle ), tire->lateralPeakAngle, tire->lateralPeakFriction,
 										  tire->lateralSlideAngle, tire->lateralSlideFriction );
 
@@ -1675,9 +1718,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		if ( engage )
 		{
 			wheel->isSticky = true;
-			muX = ground * tire->longitudinalPeakFriction;
 			muY = ground * tire->lateralPeakFriction;
-			peakX = muX;
+			peakX = ground * tire->longitudinalPeakFriction;
 			peakY = muY;
 			float holdTorque = b3MaxFloat( def->maxBrakeTorque, 2.0f * wheel->load * def->radius + 100.0f );
 			brakeTorque = b3MaxFloat( brakeTorque, holdTorque );
@@ -1693,25 +1735,10 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 		brakeTorque += tire->rollingResistance * wheel->load * def->radius;
 		wheel->brakeTorque = brakeTorque;
-		frictionX[i] = muX;
 		frictionY[i] = muY;
 		gripX[i] = peakX;
 		gripY[i] = peakY;
-	}
-
-	// Traction control
-	for ( int i = 0; i < wheelCount; ++i )
-	{
-		b3VehicleWheel* wheel = v->wheels + i;
-		bool spinning = wheel->hasContact && wheel->slipRatio > 2.0f * wheel->def.tire.longitudinalPeakSlip;
-		if ( v->assists.tractionControl && throttle > 0.0f && spinning )
-		{
-			wheel->tcScale = b3MaxFloat( 0.2f, wheel->tcScale - 4.0f * dt );
-		}
-		else
-		{
-			wheel->tcScale = b3MinFloat( 1.0f, wheel->tcScale + 2.0f * dt );
-		}
+		peakTorque[i] = ground * tire->longitudinalPeakFriction * wheel->load * def->radius;
 	}
 
 	// Implicit engine, clutch and driven wheel solve. The ground reaction from the previous step
@@ -1760,7 +1787,30 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 		float k = t->clutchStrength * clutch;
 		float rpm = v->engineSpeed * B3_RADIANS_TO_RPM;
-		float engineTorque = throttle * b3EngineTorqueAt( e, rpm );
+
+		// Traction control lowers the throttle until no grounded driven wheel gets more torque
+		// than its tire can transmit at peak grip
+		float engineThrottle = throttle;
+		if ( v->assists.tractionControl && throttle > 0.0f && clutch > 0.0f )
+		{
+			float limit = FLT_MAX;
+			for ( int i = 0; i < wheelCount; ++i )
+			{
+				float g = b3AbsFloat( shares[i] * ratio );
+				if ( g > 0.0f && v->wheels[i].hasContact )
+				{
+					limit = b3MinFloat( limit, peakTorque[i] / g );
+				}
+			}
+
+			float full = b3EngineTorqueAt( e, rpm );
+			if ( full > 0.0f && limit < FLT_MAX )
+			{
+				engineThrottle = b3MinFloat( throttle, limit / full );
+			}
+		}
+
+		float engineTorque = engineThrottle * b3EngineTorqueAt( e, rpm );
 
 		float rhs = e->inertia * v->engineSpeed + h * engineTorque;
 		float a11 = e->inertia + h * k + h * e->angularDamping;
@@ -1775,13 +1825,13 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 		// Below the floor the clutch slips. With throttle the floor rises toward a launch rpm.
 		float launch = idle + 0.35f * ( e->maxRpm - e->idleRpm ) * B3_RPM_TO_RADIANS;
-		float floorSpeed = b3LerpFloat( idle, launch, throttle );
+		float floorSpeed = b3LerpFloat( idle, launch, engineThrottle );
 		if ( engineSpeed < floorSpeed )
 		{
 			engineSpeed = floorSpeed;
 			wheelSpeed = ( b + h * k * A * floorSpeed ) / ( 1.0f + h * k * A );
 			clutchTorque = k * ( floorSpeed - wheelSpeed );
-			float available = throttle * b3EngineTorqueAt( e, floorSpeed * B3_RADIANS_TO_RPM );
+			float available = engineThrottle * b3EngineTorqueAt( e, floorSpeed * B3_RADIANS_TO_RPM );
 			clutchTorque = b3MinFloat( clutchTorque, available );
 		}
 
@@ -1795,7 +1845,12 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		for ( int i = 0; i < wheelCount; ++i )
 		{
 			b3VehicleWheel* wheel = v->wheels + i;
-			wheel->driveTorque = shares[i] * ratio * clutchTorque * wheel->tcScale;
+			float torque = shares[i] * ratio * clutchTorque;
+			if ( v->assists.tractionControl && wheel->hasContact && torque > 0.0f )
+			{
+				torque = b3MinFloat( torque, peakTorque[i] );
+			}
+			wheel->driveTorque = torque;
 		}
 	}
 
@@ -1847,7 +1902,6 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			sim->springImpulse = 0.0f;
 			sim->bumpImpulse = 0.0f;
 			sim->lateralImpulse = 0.0f;
-			sim->longitudinalFriction = 0.0f;
 			sim->lateralFriction = 0.0f;
 			sim->longitudinalGrip = 0.0f;
 			sim->lateralGrip = 0.0f;
@@ -1875,7 +1929,6 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		sim->stiffness = stiffness;
 		sim->compressionDamping = wheel->compressionDamping;
 		sim->reboundDamping = wheel->reboundDamping;
-		sim->longitudinalFriction = frictionX[i];
 		sim->lateralFriction = frictionY[i];
 		sim->longitudinalGrip = gripX[i];
 		sim->lateralGrip = gripY[i];

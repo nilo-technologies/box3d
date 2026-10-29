@@ -318,10 +318,11 @@ typedef struct b3VehicleAssists
 	/// Lateral grip multiplier on handbraked wheels at full handbrake. Below 1 makes drifting easy.
 	float driftGripScale;
 
-	/// Cuts drive torque on wheels slipping past twice the peak slip
+	/// Limits the throttle so no grounded driven wheel gets more torque than its tire can transmit
+	/// at peak grip
 	bool tractionControl;
 
-	/// Releases brakes on wheels slipping past twice the peak slip
+	/// Caps the brake torque at what the tire can transmit at peak grip so the wheels do not lock
 	bool abs;
 
 	/// Downforce coefficient, force = downforce * speed^2 (N*s^2/m^2)

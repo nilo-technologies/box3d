@@ -236,6 +236,42 @@ static int AccelerationTest( void )
 	return 0;
 }
 
+// A full throttle launch from rest, with and without traction control
+static float LaunchSlip( bool tractionControl )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.assists.tractionControl = tractionControl;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 120 );
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	float maxSlip = 0.0f;
+	for ( int i = 0; i < 120; ++i )
+	{
+		Step( worldId, 1 );
+		for ( int j = 2; j < 4; ++j )
+		{
+			float sr = b3Vehicle_GetWheelState( vehicleId, j ).slipRatio;
+			maxSlip = b3MaxFloat( maxSlip, sr );
+		}
+	}
+
+	b3DestroyWorld( worldId );
+	return maxSlip;
+}
+
+static int TractionControlTest( void )
+{
+	float with = LaunchSlip( true );
+	float without = LaunchSlip( false );
+	printf( "    launch slip ratio %.2f with traction control, %.2f without\n", with, without );
+	ENSURE( with < 0.15f );
+	ENSURE( without > 1.0f );
+	return 0;
+}
+
 static float BrakingDistance( bool abs )
 {
 	b3WorldId worldId = CreateVehicleWorld( 1 );
@@ -904,6 +940,7 @@ int VehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
 	RUN_SUBTEST( AccelerationTest );
+	RUN_SUBTEST( TractionControlTest );
 	RUN_SUBTEST( BrakingTest );
 	RUN_SUBTEST( TurningTest );
 	RUN_SUBTEST( AntiRollTest );

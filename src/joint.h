@@ -180,8 +180,8 @@ typedef struct b3VehicleWheelJoint
 	float driveTorque;
 	float brakeTorque;
 
-	// Friction coefficients, the row limits are these times the normal impulse
-	float longitudinalFriction;
+	// Lateral friction coefficient at the current slip angle, the row limit is this times the
+	// normal impulse
 	float lateralFriction;
 
 	// Friction ellipse radii, the available grip on each axis at full slip
