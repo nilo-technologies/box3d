@@ -95,6 +95,9 @@ set(BOX3D_SOURCE_FILES
 	timer.c
 	triangle_manifold.c
 	types.c
+	vehicle.c
+	vehicle.h
+	vehicle_wheel_joint.c
 	verstable.h
 	weld_joint.c
 	wheel_joint.c
@@ -115,6 +118,7 @@ set(BOX3D_INCLUDE_FILES
 	../include/box3d/id.h
 	../include/box3d/math_functions.h
 	../include/box3d/types.h
+	../include/box3d/vehicle.h
 )
 
 # Hide internal functions

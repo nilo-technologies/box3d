@@ -306,6 +306,9 @@ b3WorldId b3CreateWorld( const b3WorldDef* def )
 	world->jointIdPool = b3CreateIdPool();
 	b3Array_Reserve( world->joints, 16 );
 
+	world->vehicleIdPool = b3CreateIdPool();
+	world->vehicleAnchorId = b3_nullBodyId;
+
 	world->islandIdPool = b3CreateIdPool();
 	b3Array_Reserve( world->islands, b3MaxInt( 16, def->capacity.dynamicBodyCount ) );
 
@@ -492,6 +495,7 @@ void b3DestroyWorld( b3WorldId worldId )
 	b3Array_Destroy( world->fatAABBs );
 	b3Array_Destroy( world->contacts );
 	b3Array_Destroy( world->joints );
+	b3Array_Destroy( world->vehicles );
 
 	for ( int i = 0; i < world->islands.count; ++i )
 	{
@@ -521,6 +525,7 @@ void b3DestroyWorld( b3WorldId worldId )
 	b3DestroyIdPool( &world->shapeIdPool );
 	b3DestroyIdPool( &world->contactIdPool );
 	b3DestroyIdPool( &world->jointIdPool );
+	b3DestroyIdPool( &world->vehicleIdPool );
 	b3DestroyIdPool( &world->islandIdPool );
 	b3DestroyIdPool( &world->solverSetIdPool );
 
@@ -1046,6 +1051,9 @@ void b3World_Step( b3WorldId worldId, float timeStep, int subStepCount )
 	}
 
 	B3_REC( world, Step, worldId, timeStep, subStepCount );
+
+	// Wheel casts and joint updates need an unlocked world
+	b3UpdateVehiclesPreStep( world, timeStep );
 
 	world->locked = true;
 
@@ -2328,6 +2336,13 @@ void b3World_StartRecording( b3WorldId worldId, b3Recording* recording )
 	b3World* world = b3GetUnlockedWorldFromId( worldId );
 
 	if ( world == NULL || recording == NULL || world->recording != NULL )
+	{
+		return;
+	}
+
+	// Vehicles are not recorded
+	B3_ASSERT( b3GetIdCount( &world->vehicleIdPool ) == 0 );
+	if ( b3GetIdCount( &world->vehicleIdPool ) > 0 )
 	{
 		return;
 	}

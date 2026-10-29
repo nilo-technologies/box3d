@@ -654,6 +654,9 @@ typedef enum b3JointType
 	b3_wheelJoint,
 	b3_moverJoint,
 	b3_pogoJoint,
+
+	/// Internal joint created by the vehicle module, one per wheel. Not user creatable.
+	b3_vehicleWheelJoint,
 	b3_cylindricalJoint,
 } b3JointType;
 
