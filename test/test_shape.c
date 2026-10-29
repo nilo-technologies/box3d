@@ -1057,7 +1057,8 @@ typedef struct MeshRestResult
 
 // A unit cube resting on a flat mesh floor with the given rest offset. When jointed, two rigid
 // revolute hinges hold the cube at its flush pose (bottom face exactly on the floor), like a door.
-static MeshRestResult SettleOnMesh( float restOffset, bool jointed )
+// With lowerToFlush the cube first settles, then the offset is set to zero on the live contact.
+static MeshRestResult SettleOnMesh( float restOffset, bool jointed, bool lowerToFlush )
 {
 	b3WorldDef worldDef = b3DefaultWorldDef();
 	worldDef.gravity = (b3Vec3){ 0.0f, -10.0f, 0.0f };
@@ -1115,6 +1116,15 @@ static MeshRestResult SettleOnMesh( float restOffset, bool jointed )
 		}
 	}
 
+	if ( lowerToFlush )
+	{
+		for ( int i = 0; i < 60; ++i )
+		{
+			b3World_Step( worldId, 1.0f / 60.0f, 4 );
+		}
+		b3Shape_SetMeshRestOffset( meshShapeId, 0.0f );
+	}
+
 	// Peak height and peak hinge force over the second half of the run
 	MeshRestResult result = { 0.0f, 0.0f, b3Shape_GetMeshRestOffset( meshShapeId ) };
 	for ( int i = 0; i < 120; ++i )
@@ -1147,15 +1157,20 @@ static int MeshRestOffsetTest( void )
 
 	float weight = 1000.0f * 10.0f;
 
-	MeshRestResult flush = SettleOnMesh( 0.0f, false );
-	MeshRestResult lifted = SettleOnMesh( B3_MESH_REST_OFFSET, false );
+	MeshRestResult flush = SettleOnMesh( 0.0f, false, false );
+	MeshRestResult lifted = SettleOnMesh( B3_MESH_REST_OFFSET, false, false );
 	ENSURE( flush.reportedOffset == 0.0f && lifted.reportedOffset == B3_MESH_REST_OFFSET );
 	printf( "mesh rest: flush %.5f lifted %.5f\n", flush.height, lifted.height );
 	ENSURE_SMALL( flush.height - 0.5f, 0.25f * B3_LINEAR_SLOP );
 	ENSURE_SMALL( lifted.height - flush.height - B3_MESH_REST_OFFSET, 0.25f * B3_LINEAR_SLOP );
 
-	MeshRestResult flushJointed = SettleOnMesh( 0.0f, true );
-	MeshRestResult liftedJointed = SettleOnMesh( B3_MESH_REST_OFFSET, true );
+	// Changing the offset under a resting body applies despite contact recycling
+	MeshRestResult lowered = SettleOnMesh( B3_MESH_REST_OFFSET, false, true );
+	ENSURE( lowered.reportedOffset == 0.0f );
+	ENSURE_SMALL( lowered.height - flush.height, 0.25f * B3_LINEAR_SLOP );
+
+	MeshRestResult flushJointed = SettleOnMesh( 0.0f, true, false );
+	MeshRestResult liftedJointed = SettleOnMesh( B3_MESH_REST_OFFSET, true, false );
 	printf( "mesh rest joints: flush %.1f N lifted %.1f N\n", flushJointed.jointForce, liftedJointed.jointForce );
 	ENSURE( flushJointed.jointForce <= 1.05f * weight );
 	ENSURE( liftedJointed.jointForce > 2.0f * weight );

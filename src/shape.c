@@ -1420,11 +1420,29 @@ void b3Shape_SetMeshRestOffset( b3ShapeId shapeId, float restOffset )
 {
 	B3_ASSERT( b3IsValidFloat( restOffset ) && 0.0f <= restOffset && restOffset < B3_SPECULATIVE_DISTANCE );
 
-	b3World* world = b3GetWorld( shapeId.world0 );
-	B3_REC( world, ShapeSetMeshRestOffset, shapeId, restOffset );
+	b3World* world = b3GetUnlockedWorld( shapeId.world0 );
+	if ( world == NULL )
+	{
+		return;
+	}
+
 	b3Shape* shape = b3GetShape( world, shapeId );
 	B3_ASSERT( shape->type == b3_meshShape );
+	if ( shape->meshRestOffset == restOffset )
+	{
+		return;
+	}
+
+	B3_REC( world, ShapeSetMeshRestOffset, shapeId, restOffset );
 	shape->meshRestOffset = restOffset;
+
+	// Recycled manifolds keep the separation computed with the old offset, so rebuild the contacts
+	// and wake the touching bodies to settle at the new offset.
+	world->locked = true;
+	bool wakeBodies = true;
+	b3DestroyShapeContacts( world, shape, wakeBodies );
+	b3ValidateSolverSets( world );
+	world->locked = false;
 }
 
 float b3Shape_GetMeshRestOffset( b3ShapeId shapeId )
