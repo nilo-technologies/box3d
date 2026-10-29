@@ -252,8 +252,9 @@ void b3SolveVehicleWheelJoint( b3JointSim* base, b3StepContext* context, bool us
 	}
 
 	float normalImpulse = joint->springImpulse + joint->bumpImpulse;
-	// The wheel spin is too light for a force limit that lags the slip by a step, so the roller
-	// holds up to the peak grip and only falls to the sliding grip once the tire is sliding.
+	// The wheel spin is too light for a force limit that lags the slip by a step, so unlike the
+	// lateral row the roller is limited by the grip itself, which the pre-step holds at the peak
+	// until the tire slides past the peak slip.
 	float maxLongitudinal = joint->longitudinalGrip * normalImpulse;
 	float maxLateral = joint->lateralFriction * normalImpulse;
 

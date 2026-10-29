@@ -184,7 +184,8 @@ typedef struct b3VehicleWheelJoint
 	// normal impulse
 	float lateralFriction;
 
-	// Friction ellipse radii, the available grip on each axis at full slip
+	// Friction ellipse radii: the peak friction until the slip passes the peak, then falling to
+	// the sliding friction. longitudinalGrip is also the longitudinal row limit.
 	float longitudinalGrip;
 	float lateralGrip;
 
