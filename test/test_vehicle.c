@@ -982,6 +982,99 @@ static int SleepTest( void )
 	return 0;
 }
 
+// Reads the bulk wheel data and checks every wheel against the per wheel getters. Returns the
+// number of wheels with each flag set.
+static int CheckWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int* contactCount, int* stickyCount )
+{
+	int count = b3Vehicle_GetWheelData( vehicleId, data, B3_MAX_VEHICLE_WHEELS );
+	ENSURE( count == b3Vehicle_GetWheelCount( vehicleId ) );
+
+	*contactCount = 0;
+	*stickyCount = 0;
+	for ( int i = 0; i < count; ++i )
+	{
+		b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, i );
+		b3WorldTransform xf = b3Vehicle_GetWheelTransform( vehicleId, i );
+		const b3VehicleWheelData* d = data + i;
+
+		ENSURE_SMALL( d->position.x - (float)xf.p.x, 1e-4f );
+		ENSURE_SMALL( d->position.y - (float)xf.p.y, 1e-4f );
+		ENSURE_SMALL( d->position.z - (float)xf.p.z, 1e-4f );
+		ENSURE( d->rotation.v.x == xf.q.v.x && d->rotation.v.y == xf.q.v.y && d->rotation.v.z == xf.q.v.z &&
+				d->rotation.s == xf.q.s );
+		ENSURE( ( ( d->flags & b3_vehicleWheelContact ) != 0 ) == ws.hasContact );
+		ENSURE( ( ( d->flags & b3_vehicleWheelSticky ) != 0 ) == ws.isSticky );
+		ENSURE( ( d->flags & ~( b3_vehicleWheelContact | b3_vehicleWheelSticky ) ) == 0 );
+		ENSURE( d->contactPoint.x == (float)ws.contactPoint.x && d->contactPoint.y == (float)ws.contactPoint.y &&
+				d->contactPoint.z == (float)ws.contactPoint.z );
+		ENSURE( d->contactNormal.x == ws.contactNormal.x && d->contactNormal.y == ws.contactNormal.y &&
+				d->contactNormal.z == ws.contactNormal.z );
+		ENSURE( d->suspensionLength == ws.suspensionLength && d->compression == ws.compression );
+		ENSURE( d->load == ws.load && d->slipRatio == ws.slipRatio && d->slipAngle == ws.slipAngle );
+		ENSURE( d->angularVelocity == ws.angularVelocity && d->rotationAngle == ws.rotationAngle );
+		ENSURE( d->steerAngle == ws.steerAngle );
+		ENSURE( d->longitudinalForce == ws.longitudinalForce && d->lateralForce == ws.lateralForce );
+		ENSURE( d->driveTorque == ws.driveTorque && d->brakeTorque == ws.brakeTorque );
+		ENSURE( B3_ID_EQUALS( d->groundShapeId, ws.groundShapeId ) );
+		ENSURE( d->userMaterialId == ws.userMaterialId );
+
+		*contactCount += ws.hasContact ? 1 : 0;
+		*stickyCount += ws.isSticky ? 1 : 0;
+	}
+
+	return 0;
+}
+
+// The bulk wheel readout matches the per wheel getters parked, driving and airborne
+static int WheelDataTest( void )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 1.0f, 0.0f }, NULL );
+	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+
+	b3VehicleWheelData data[B3_MAX_VEHICLE_WHEELS];
+	int contactCount, stickyCount;
+
+	// Parked: the sticky tires hold the car
+	Step( worldId, 180 );
+	ENSURE( CheckWheelData( vehicleId, data, &contactCount, &stickyCount ) == 0 );
+	ENSURE( contactCount == 4 && stickyCount == 4 );
+
+	// Driving and turning: the front wheels are steered
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .steer = 0.5f } );
+	Step( worldId, 60 );
+	ENSURE( CheckWheelData( vehicleId, data, &contactCount, &stickyCount ) == 0 );
+	ENSURE( contactCount == 4 && stickyCount == 0 );
+	ENSURE( data[0].steerAngle != 0.0f && data[0].load > 0.0f );
+	ENSURE( B3_IS_NON_NULL( data[0].groundShapeId ) );
+
+	// Lifted off the ground: no stale contact is reported. Loads and forces are read back from the
+	// previous step's solve, so they clear one step after the contact does.
+	b3Body_SetTransform( chassisId, (b3Pos){ 0.0f, 50.0f, 0.0f }, b3Quat_identity );
+	Step( worldId, 2 );
+	ENSURE( CheckWheelData( vehicleId, data, &contactCount, &stickyCount ) == 0 );
+	ENSURE( contactCount == 0 && stickyCount == 0 );
+	for ( int i = 0; i < 4; ++i )
+	{
+		ENSURE( data[i].flags == 0 );
+		ENSURE( data[i].contactPoint.x == 0.0f && data[i].contactPoint.y == 0.0f && data[i].contactPoint.z == 0.0f );
+		ENSURE( data[i].contactNormal.x == 0.0f && data[i].contactNormal.y == 0.0f && data[i].contactNormal.z == 0.0f );
+		ENSURE( B3_IS_NULL( data[i].groundShapeId ) && data[i].userMaterialId == 0 );
+		ENSURE( data[i].load == 0.0f );
+	}
+
+	// Capacity limits the write, and a negative capacity writes nothing
+	b3VehicleWheelData partial[3] = { 0 };
+	partial[2].load = -1.0f;
+	ENSURE( b3Vehicle_GetWheelData( vehicleId, partial, 2 ) == 2 );
+	ENSURE( partial[2].load == -1.0f );
+	ENSURE( b3Vehicle_GetWheelData( vehicleId, partial, -1 ) == 0 );
+
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
 int VehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
@@ -999,5 +1092,6 @@ int VehicleTest( void )
 	RUN_SUBTEST( TimeStepTest );
 	RUN_SUBTEST( LiveSettingsTest );
 	RUN_SUBTEST( SleepTest );
+	RUN_SUBTEST( WheelDataTest );
 	return 0;
 }
