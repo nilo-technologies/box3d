@@ -420,10 +420,13 @@ static int SlopeHoldTest( void )
 	float handbrake = SlopeDrift( 20.0f, false, 1.0f );
 	float side = SlopeDrift( 15.0f, true, 0.0f );
 	float rest = SlopeDrift( 10.0f, false, 0.0f );
-	printf( "    drift: handbrake 20 deg %.4f m, side 15 deg %.4f m, idle 10 deg %.4f m\n", handbrake, side, rest );
+	float steep = SlopeDrift( 20.0f, false, 0.0f );
+	printf( "    drift: handbrake 20 deg %.4f m, side 15 deg %.4f m, idle 10 deg %.4f m, idle 20 deg %.4f m\n", handbrake,
+			side, rest, steep );
 	ENSURE( handbrake < 0.05f );
 	ENSURE( side < 0.05f );
 	ENSURE( rest < 0.05f );
+	ENSURE( steep < 0.05f );
 	return 0;
 }
 

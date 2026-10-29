@@ -164,7 +164,7 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	def.assists.maxTiltAngle = 0.0f;
 	def.assists.stickyTire = true;
 	def.assists.stickySpeed = 0.25f;
-	def.assists.stickyTime = 0.1f;
+	def.assists.stickyTime = 0.0f;
 
 	def.internalValue = B3_SECRET_COOKIE;
 	return def;
