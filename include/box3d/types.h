@@ -563,6 +563,12 @@ typedef struct b3ShapeDef
 	/// and height fields).
 	bool enableSpeculativeContact;
 
+	/// Mesh shapes only: the rest offset subtracted from every mesh contact separation, so the
+	/// solver holds other shapes this far off the mesh surface. Default is B3_MESH_REST_OFFSET,
+	/// which reduces ghost collisions and assists continuous collision. Zero lets shapes rest
+	/// flush on the mesh. Must be in [0, B3_SPECULATIVE_DISTANCE).
+	float meshRestOffset;
+
 	/// Used internally to detect a valid definition. DO NOT SET.
 	int internalValue;
 

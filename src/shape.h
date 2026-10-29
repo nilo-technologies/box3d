@@ -38,6 +38,8 @@ typedef struct b3Shape
 	float density;
 	float explosionScale;
 	float aabbMargin;
+	// Mesh shapes only, see b3ShapeDef::meshRestOffset
+	float meshRestOffset;
 
 	b3AABB aabb;
 	b3Vec3 localCentroid;

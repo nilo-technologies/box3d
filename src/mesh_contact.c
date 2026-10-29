@@ -563,8 +563,9 @@ bool b3ComputeMeshManifolds( b3World* world, int workerIndex, b3Contact* contact
 	// In the past I've called this `polygon skin`, but PhysX and Unreal
 	// call it `rest offset` which seems appropriate in this case.
 	// It leads to a small visual gap but seems to improve the quality of mesh
-	// collision, especially for hull versus mesh.
-	float restOffset = B3_MESH_REST_OFFSET;
+	// collision, especially for hull versus mesh. Mesh shapes can override it,
+	// see b3ShapeDef::meshRestOffset.
+	float restOffset = shapeA->type == b3_meshShape ? shapeA->meshRestOffset : B3_MESH_REST_OFFSET;
 	bool enableSpeculative = contact->flags & b3_enableSpeculativePoints;
 
 	// Make room for clip points

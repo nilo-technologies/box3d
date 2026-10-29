@@ -996,6 +996,13 @@ B3_API void b3Shape_SetSurfaceMaterial( b3ShapeId shapeId, b3SurfaceMaterial sur
 /// Get the base shape surface material.
 B3_API b3SurfaceMaterial b3Shape_GetSurfaceMaterial( b3ShapeId shapeId );
 
+/// Set the rest offset of a mesh shape, see b3ShapeDef::meshRestOffset. Must be in
+/// [0, B3_SPECULATIVE_DISTANCE). Applies to existing contacts from the next step.
+B3_API void b3Shape_SetMeshRestOffset( b3ShapeId shapeId, float restOffset );
+
+/// Get the rest offset of a mesh shape, see b3ShapeDef::meshRestOffset.
+B3_API float b3Shape_GetMeshRestOffset( b3ShapeId shapeId );
+
 /// Get the number of mesh surface materials.
 B3_API int b3Shape_GetMeshMaterialCount( b3ShapeId shapeId );
 
