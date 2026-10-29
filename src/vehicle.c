@@ -1297,7 +1297,7 @@ static void b3UpdateGearbox( b3Vehicle* v, float dt, float shiftRpm, bool blockU
 	if ( t->mode == b3_vehicleTransmissionAuto )
 	{
 		// Without forward input the brake doubles as reverse: it brakes while moving forward and
-		// selects reverse and drives backward once stopped
+		// selects reverse and drives backward once below the switch speed
 		if ( forward == 0.0f && brake > 0.0f )
 		{
 			forward = -brake;
