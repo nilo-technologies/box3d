@@ -1359,6 +1359,7 @@ static int AllOps( void )
 	b3Shape_SetHull( boxShapeId, &swapHull.base );
 	b3Shape_SetMesh( meshShapeId, swapMeshData, (b3Vec3){ 1.0f, 1.0f, 1.0f } );
 	b3Shape_SetMeshMaterial( meshShapeId, surfMat, 0 );
+	b3Shape_SetMeshRestOffset( meshShapeId, 0.0f );
 
 	// Body mutators: SetTransform, SetLinearVelocity/AngularVelocity (Vec3), SetName,
 	// damping, gravity scale, sleep threshold, SetAwake, EnableSleep, SetBullet, SetMotionLocks,
@@ -2433,6 +2434,7 @@ static uint64_t RunGeometryMutatorScene( b3Recording* rec, bool mutate, const b3
 		b3SurfaceMaterial grippy = b3DefaultSurfaceMaterial();
 		grippy.friction = swapFriction;
 		b3Shape_SetMeshMaterial( meshShapeId, grippy, 1 );
+		b3Shape_SetMeshRestOffset( meshShapeId, 0.0f );
 	}
 
 	for ( int i = 0; i < 30; ++i )
@@ -2515,6 +2517,7 @@ static int GeometryMutatorReplay( void )
 
 	b3SurfaceMaterial replayMaterial = b3Shape_GetMeshSurfaceMaterial( replayMeshShape, 1 );
 	ENSURE( replayMaterial.friction == swapFriction );
+	ENSURE( b3Shape_GetMeshRestOffset( replayMeshShape ) == 0.0f );
 
 	b3DestroyPlayer( player );
 	b3DestroyRecording( rec );

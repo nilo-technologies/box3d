@@ -50,7 +50,9 @@ typedef struct b3World b3World;
 // Major version 6 widened the body def with the safety factor.
 // Major version 7 added springStiffness/springDamping to the distance joint def record, plus the
 // cylindrical joint, shape enable/disable and distance joint stiffness ops.
-#define B3_REC_VERSION_MAJOR 7
+// Major version 8 added meshRestOffset to the shape def record and b3Shape, plus the shape mesh
+// rest offset op.
+#define B3_REC_VERSION_MAJOR 8
 
 // Minor tracks op-stream additions that keep the 48 byte header shape.
 // Minor version 7 made the contact body sim locators persistent

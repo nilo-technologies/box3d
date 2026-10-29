@@ -487,6 +487,7 @@ b3ShapeDef b3RecR_SHAPEDEF( b3RecReader* rdr )
 	def.invokeContactCreation = b3RecR_BOOL( rdr );
 	def.updateBodyMass = b3RecR_BOOL( rdr );
 	def.enableSpeculativeContact = b3RecR_BOOL( rdr );
+	def.meshRestOffset = b3RecR_F32( rdr );
 	def.userData = NULL;
 	return def;
 }
@@ -1241,6 +1242,11 @@ static void b3RecDispatch_ShapeDisable( const b3RecArgs_ShapeDisable* a, b3RecRe
 static void b3RecDispatch_ShapeEnable( const b3RecArgs_ShapeEnable* a, b3RecReader* rdr )
 {
 	b3Shape_Enable( b3RecMakeShapeId( rdr, a->shape ) );
+}
+
+static void b3RecDispatch_ShapeSetMeshRestOffset( const b3RecArgs_ShapeSetMeshRestOffset* a, b3RecReader* rdr )
+{
+	b3Shape_SetMeshRestOffset( b3RecMakeShapeId( rdr, a->shape ), a->restOffset );
 }
 
 // Joint creates: remap body ids in the def before calling the API.

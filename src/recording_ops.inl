@@ -106,6 +106,7 @@ B3_REC_OP( 0x5E, ShapeSetHull, RET_NONE, ARG( SHAPEID, shape ) ARG( GEOMID, geom
 B3_REC_OP( 0x5F, ShapeSetMesh, RET_NONE, ARG( SHAPEID, shape ) ARG( GEOMID, geometryId ) ARG( VEC3, scale ) )
 B3_REC_OP( 0x60, ShapeDisable, RET_NONE, ARG( SHAPEID, shape ) )
 B3_REC_OP( 0x61, ShapeEnable, RET_NONE, ARG( SHAPEID, shape ) )
+B3_REC_OP( 0x62, ShapeSetMeshRestOffset, RET_NONE, ARG( SHAPEID, shape ) ARG( F32, restOffset ) )
 
 // Cylindrical joint. Added after the original joint block, so it lives in the free 0x71-0x7F and
 // 0x8B-0x8E ranges.

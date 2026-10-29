@@ -81,6 +81,7 @@ b3ShapeDef b3DefaultShapeDef( void )
 	def.updateBodyMass = true;
 	def.invokeContactCreation = true;
 	def.enableSpeculativeContact = true;
+	def.meshRestOffset = B3_MESH_REST_OFFSET;
 	def.internalValue = B3_SECRET_COOKIE;
 	return def;
 }

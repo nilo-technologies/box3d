@@ -1048,6 +1048,141 @@ static int ShapeEnableTest( void )
 	return 0;
 }
 
+typedef struct MeshRestResult
+{
+	float height;
+	float jointForce;
+	float reportedOffset;
+} MeshRestResult;
+
+// A unit cube resting on a flat mesh floor with the given rest offset. When jointed, two rigid
+// revolute hinges hold the cube at its flush pose (bottom face exactly on the floor), like a door.
+static MeshRestResult SettleOnMesh( float restOffset, bool jointed )
+{
+	b3WorldDef worldDef = b3DefaultWorldDef();
+	worldDef.gravity = (b3Vec3){ 0.0f, -10.0f, 0.0f };
+	b3WorldId worldId = b3CreateWorld( &worldDef );
+
+	b3Vec3 vertices[4] = {
+		{ -10.0f, 0.0f, -10.0f },
+		{ -10.0f, 0.0f, 10.0f },
+		{ 10.0f, 0.0f, 10.0f },
+		{ 10.0f, 0.0f, -10.0f },
+	};
+	int32_t indices[6] = { 0, 1, 2, 0, 2, 3 };
+	b3MeshDef meshDef = { 0 };
+	meshDef.vertices = vertices;
+	meshDef.stride = sizeof( b3Vec3 );
+	meshDef.indices = indices;
+	meshDef.vertexCount = 4;
+	meshDef.triangleCount = 2;
+	b3MeshData* mesh = b3CreateMesh( &meshDef, NULL, 0 );
+
+	b3BodyDef groundDef = b3DefaultBodyDef();
+	b3BodyId groundId = b3CreateBody( worldId, &groundDef );
+	b3ShapeDef meshShapeDef = b3DefaultShapeDef();
+	meshShapeDef.meshRestOffset = restOffset;
+	b3ShapeId meshShapeId = b3CreateMeshShape( groundId, &meshShapeDef, mesh, b3Vec3_one );
+
+	b3BodyDef bodyDef = b3DefaultBodyDef();
+	bodyDef.type = b3_dynamicBody;
+	bodyDef.position = (b3Pos){ 0.0f, 0.5f, 0.0f };
+	b3BodyId bodyId = b3CreateBody( worldId, &bodyDef );
+	b3BoxHull cube = b3MakeCubeHull( 0.5f );
+	b3ShapeDef shapeDef = b3DefaultShapeDef();
+	b3CreateHullShape( bodyId, &shapeDef, &cube.base );
+
+	b3JointId hinges[2] = { 0 };
+	if ( jointed )
+	{
+		// Hinge to a separate static body: joints disable collision between the bodies they connect
+		b3BodyId anchorId = b3CreateBody( worldId, &groundDef );
+		for ( int i = 0; i < 2; ++i )
+		{
+			// Hinge axis (joint z) is vertical, at the cube's left edge. The lower hinge swings the
+			// cube across the floor like a door.
+			b3Vec3 local = { -0.5f, i == 0 ? -0.25f : 0.25f, 0.0f };
+			b3Quat axisUp = b3MakeQuatFromAxisAngle( (b3Vec3){ 1.0f, 0.0f, 0.0f }, -0.5f * B3_PI );
+			b3RevoluteJointDef jointDef = b3DefaultRevoluteJointDef();
+			jointDef.base.bodyIdA = anchorId;
+			jointDef.base.bodyIdB = bodyId;
+			jointDef.base.localFrameA = (b3Transform){ { local.x, local.y + 0.5f, local.z }, axisUp };
+			jointDef.base.localFrameB = (b3Transform){ local, axisUp };
+			jointDef.enableMotor = i == 0;
+			jointDef.motorSpeed = 1.0f;
+			jointDef.maxMotorTorque = 1.0e5f;
+			hinges[i] = b3CreateRevoluteJoint( worldId, &jointDef );
+		}
+	}
+
+	// Peak height and peak hinge force over the second half of the run
+	MeshRestResult result = { 0.0f, 0.0f, b3Shape_GetMeshRestOffset( meshShapeId ) };
+	for ( int i = 0; i < 120; ++i )
+	{
+		b3World_Step( worldId, 1.0f / 60.0f, 4 );
+		if ( i < 60 )
+		{
+			continue;
+		}
+
+		result.height = b3MaxFloat( result.height, b3Body_GetPosition( bodyId ).y );
+		if ( jointed )
+		{
+			float force = b3Length( b3Joint_GetConstraintForce( hinges[0] ) ) + b3Length( b3Joint_GetConstraintForce( hinges[1] ) );
+			result.jointForce = b3MaxFloat( result.jointForce, force );
+		}
+	}
+
+	b3DestroyWorld( worldId );
+	b3DestroyMesh( mesh );
+	return result;
+}
+
+// b3ShapeDef::meshRestOffset: zero lets a hull rest flush on a mesh, and a jointed body held flush
+// on the mesh is not pushed against its joints. The default offset lifts both.
+static int MeshRestOffsetTest( void )
+{
+	b3ShapeDef def = b3DefaultShapeDef();
+	ENSURE( def.meshRestOffset == B3_MESH_REST_OFFSET );
+
+	float weight = 1000.0f * 10.0f;
+
+	MeshRestResult flush = SettleOnMesh( 0.0f, false );
+	MeshRestResult lifted = SettleOnMesh( B3_MESH_REST_OFFSET, false );
+	ENSURE( flush.reportedOffset == 0.0f && lifted.reportedOffset == B3_MESH_REST_OFFSET );
+	printf( "mesh rest: flush %.5f lifted %.5f\n", flush.height, lifted.height );
+	ENSURE_SMALL( flush.height - 0.5f, 0.25f * B3_LINEAR_SLOP );
+	ENSURE_SMALL( lifted.height - flush.height - B3_MESH_REST_OFFSET, 0.25f * B3_LINEAR_SLOP );
+
+	MeshRestResult flushJointed = SettleOnMesh( 0.0f, true );
+	MeshRestResult liftedJointed = SettleOnMesh( B3_MESH_REST_OFFSET, true );
+	printf( "mesh rest joints: flush %.1f N lifted %.1f N\n", flushJointed.jointForce, liftedJointed.jointForce );
+	ENSURE( flushJointed.jointForce <= 1.05f * weight );
+	ENSURE( liftedJointed.jointForce > 2.0f * weight );
+
+	// The setter applies to an existing mesh shape
+	b3WorldDef worldDef = b3DefaultWorldDef();
+	b3WorldId worldId = b3CreateWorld( &worldDef );
+	b3Vec3 vertices[3] = { { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f } };
+	int32_t indices[3] = { 0, 1, 2 };
+	b3MeshDef meshDef = { 0 };
+	meshDef.vertices = vertices;
+	meshDef.stride = sizeof( b3Vec3 );
+	meshDef.indices = indices;
+	meshDef.vertexCount = 3;
+	meshDef.triangleCount = 1;
+	b3MeshData* mesh = b3CreateMesh( &meshDef, NULL, 0 );
+	b3BodyDef bodyDef = b3DefaultBodyDef();
+	b3BodyId bodyId = b3CreateBody( worldId, &bodyDef );
+	b3ShapeId shapeId = b3CreateMeshShape( bodyId, &def, mesh, b3Vec3_one );
+	ENSURE( b3Shape_GetMeshRestOffset( shapeId ) == B3_MESH_REST_OFFSET );
+	b3Shape_SetMeshRestOffset( shapeId, 0.0f );
+	ENSURE( b3Shape_GetMeshRestOffset( shapeId ) == 0.0f );
+	b3DestroyWorld( worldId );
+	b3DestroyMesh( mesh );
+	return 0;
+}
+
 int ShapeTest( void )
 {
 	box = b3MakeBoxHull( 1.0f, 1.0f, 1.0f );
@@ -1057,6 +1192,7 @@ int ShapeTest( void )
 	RUN_SUBTEST( ShapeNameTest );
 	RUN_SUBTEST( ShapeFlagsTest );
 	RUN_SUBTEST( ShapeEnableTest );
+	RUN_SUBTEST( MeshRestOffsetTest );
 	// RUN_SUBTEST( PointInShapeTest );
 	RUN_SUBTEST( RayCastShapeTest );
 

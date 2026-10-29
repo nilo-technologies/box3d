@@ -77,7 +77,8 @@ B3_API float b3GetLengthUnitsPerMeter( void );
 /// The rest offset is used for mesh contact to reduce ghost collisions and assist with CCD.
 /// The rest offset adjusts the contact point separation value, making the solver push the shapes
 /// apart by this distance.
-/// Must be at least B3_LINEAR_SLOP and less than B3_SPECULATIVE_DISTANCE.
+/// Must be at least B3_LINEAR_SLOP and less than B3_SPECULATIVE_DISTANCE. This is the default of
+/// b3ShapeDef::meshRestOffset, which a mesh shape can lower to zero.
 #define B3_MESH_REST_OFFSET ( 1.0f * B3_LINEAR_SLOP )
 
 /// The default contact recycling distance.

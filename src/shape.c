@@ -178,6 +178,7 @@ static b3Shape* b3CreateShapeInternal( b3World* world, b3Body* body, b3WorldTran
 	shape->flags |= def->enableHitEvents ? b3_enableHitEvents : 0;
 	shape->flags |= def->enablePreSolveEvents ? b3_enablePreSolveEvents : 0;
 	shape->flags |= def->enableSpeculativeContact ? b3_enableSpeculative : 0;
+	shape->meshRestOffset = def->meshRestOffset;
 	shape->proxyKey = B3_NULL_INDEX;
 	shape->localCentroid = b3GetShapeCentroid( shape );
 	shape->aabbMargin = b3ComputeShapeMargin( shape );
@@ -257,6 +258,8 @@ static b3ShapeId b3CreateShape( b3BodyId bodyId, const b3ShapeDef* def, const vo
 	B3_ASSERT( b3IsValidFloat( def->density ) && def->density >= 0.0f );
 	B3_ASSERT( b3IsValidFloat( def->baseMaterial.friction ) && def->baseMaterial.friction >= 0.0f );
 	B3_ASSERT( b3IsValidFloat( def->baseMaterial.restitution ) && def->baseMaterial.restitution >= 0.0f );
+	B3_ASSERT( b3IsValidFloat( def->meshRestOffset ) && 0.0f <= def->meshRestOffset &&
+			   def->meshRestOffset < B3_SPECULATIVE_DISTANCE );
 
 	b3World* world = b3GetUnlockedWorld( bodyId.world0 );
 	if ( world == NULL )
@@ -1411,6 +1414,24 @@ b3SurfaceMaterial b3Shape_GetSurfaceMaterial( b3ShapeId shapeId )
 	b3World* world = b3GetWorld( shapeId.world0 );
 	b3Shape* shape = b3GetShape( world, shapeId );
 	return b3GetShapeMaterials( shape )[0];
+}
+
+void b3Shape_SetMeshRestOffset( b3ShapeId shapeId, float restOffset )
+{
+	B3_ASSERT( b3IsValidFloat( restOffset ) && 0.0f <= restOffset && restOffset < B3_SPECULATIVE_DISTANCE );
+
+	b3World* world = b3GetWorld( shapeId.world0 );
+	B3_REC( world, ShapeSetMeshRestOffset, shapeId, restOffset );
+	b3Shape* shape = b3GetShape( world, shapeId );
+	B3_ASSERT( shape->type == b3_meshShape );
+	shape->meshRestOffset = restOffset;
+}
+
+float b3Shape_GetMeshRestOffset( b3ShapeId shapeId )
+{
+	b3World* world = b3GetWorld( shapeId.world0 );
+	b3Shape* shape = b3GetShape( world, shapeId );
+	return shape->meshRestOffset;
 }
 
 int b3Shape_GetMeshMaterialCount( b3ShapeId shapeId )
