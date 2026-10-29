@@ -1183,8 +1183,8 @@ static int TouchdownBrakeTest( void )
 	return 0;
 }
 
-// With the automatic gearbox the brake slows the car in a forward gear, then selects reverse and
-// drives backward once stopped
+// With the automatic gearbox and the brake reverse assist, the brake slows the car in a forward
+// gear, then selects reverse and drives backward once stopped
 static int BrakeReverseTest( void )
 {
 	b3WorldId worldId = CreateVehicleWorld( 1 );
@@ -1227,6 +1227,20 @@ static int BrakeReverseTest( void )
 	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .brake = 1.0f } );
 	Step( worldId, 1 );
 	ENSURE( b3Vehicle_GetState( vehicleId ).brake == 1.0f );
+
+	// With the assist off the brake holds the car still
+	b3VehicleAssists assists = b3Vehicle_GetAssists( vehicleId );
+	ENSURE( assists.brakeReverse );
+	assists.brakeReverse = false;
+	b3Vehicle_SetAssists( vehicleId, assists );
+	b3Vehicle_Reset( vehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	Step( worldId, 180 );
+	state = b3Vehicle_GetState( vehicleId );
+	printf( "    brake reverse off: gear %d, speed %.3f m/s\n", state.gear, state.speed );
+	ENSURE( state.gear > 0 );
+	ENSURE( state.brake == 1.0f && state.throttle == 0.0f );
+	ENSURE( fabsf( state.speed ) < 0.05f );
 
 	ENSURE( VehicleIsFinite( vehicleId ) );
 	b3DestroyWorld( worldId );

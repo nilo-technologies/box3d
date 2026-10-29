@@ -166,6 +166,7 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	def.assists.stickyTire = true;
 	def.assists.stickySpeed = 0.25f;
 	def.assists.stickyTime = 0.0f;
+	def.assists.brakeReverse = true;
 
 	def.internalValue = B3_SECRET_COOKIE;
 	return def;
@@ -1296,9 +1297,9 @@ static void b3UpdateGearbox( b3Vehicle* v, float dt, float shiftRpm, bool blockU
 
 	if ( t->mode == b3_vehicleTransmissionAuto )
 	{
-		// Without forward input the brake doubles as reverse: it brakes while moving forward and
+		// Without forward input the brake can double as reverse: it brakes while moving forward and
 		// selects reverse and drives backward once below the switch speed
-		if ( forward == 0.0f && brake > 0.0f )
+		if ( v->assists.brakeReverse && forward == 0.0f && brake > 0.0f )
 		{
 			forward = -brake;
 			brake = 0.0f;
