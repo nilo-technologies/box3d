@@ -2372,7 +2372,9 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 	int contactIdBytes = b3GetIdBytes( &world->contactIdPool );
 	int islandIdBytes = b3GetIdBytes( &world->islandIdPool );
 	int shapeIdBytes = b3GetIdBytes( &world->shapeIdPool );
-	total += (uint64_t)bodyIdBytes + solverSetIdBytes + jointIdBytes + contactIdBytes + islandIdBytes + shapeIdBytes;
+	int vehicleIdBytes = b3GetIdBytes( &world->vehicleIdPool );
+	total += (uint64_t)bodyIdBytes + solverSetIdBytes + jointIdBytes + contactIdBytes + islandIdBytes + shapeIdBytes +
+			 vehicleIdBytes;
 
 	if ( log )
 	{
@@ -2383,6 +2385,7 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 		b3Log( "contact ids: %d", contactIdBytes );
 		b3Log( "island ids: %d", islandIdBytes );
 		b3Log( "shape ids: %d", shapeIdBytes );
+		b3Log( "vehicle ids: %d", vehicleIdBytes );
 	}
 
 	// Islands own per-island body/contact/joint link arrays
@@ -2403,8 +2406,9 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 	int islandArrayBytes = b3Array_ByteCount( world->islands );
 	int shapeArrayBytes = b3Array_ByteCount( world->shapes );
 	int sensorArrayBytes = b3Array_ByteCount( world->sensors );
+	int vehicleArrayBytes = b3Array_ByteCount( world->vehicles );
 	total += (uint64_t)bodyArrayBytes + solverSetArrayBytes + jointArrayBytes + contactArrayBytes + islandArrayBytes +
-			 islandLinkBytes + shapeArrayBytes + sensorArrayBytes;
+			 islandLinkBytes + shapeArrayBytes + sensorArrayBytes + vehicleArrayBytes;
 
 	if ( log )
 	{
@@ -2417,6 +2421,7 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 		b3Log( "island links: %d", islandLinkBytes );
 		b3Log( "shapes: %d", shapeArrayBytes );
 		b3Log( "sensors: %d", sensorArrayBytes );
+		b3Log( "vehicles: %d", vehicleArrayBytes );
 	}
 
 	// Sensors own overlap tracking arrays. The sensor array is dense.

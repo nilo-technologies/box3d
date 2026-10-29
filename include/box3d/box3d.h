@@ -316,6 +316,8 @@ B3_API int b3Recording_GetSize( const b3Recording* recording );
 
 /// Begin recording world mutations into the provided buffer.
 /// The buffer is reset on each call so a single b3Recording can be reused for multiple sessions.
+/// Vehicles are not recorded: this does nothing, and asserts in debug builds, while the world has
+/// any vehicle. Check b3World_GetVehicleCount first.
 /// @param worldId the world to record
 /// @param recording the recording handle to write into
 B3_API void b3World_StartRecording( b3WorldId worldId, b3Recording* recording );
