@@ -29,6 +29,7 @@ set(BOX3D_SOURCE_FILES
 	convex_manifold.c
 	core.c
 	core.h
+	cylindrical_joint.c
 	ctz.h
 	distance_joint.c
 	distance.c

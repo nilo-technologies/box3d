@@ -1426,6 +1426,13 @@ static int AllOps( void )
 	b3BoxHull fastBox = b3MakeBoxHull( 0.5f, 0.5f, 0.5f );
 	b3CreateHullShape( fastId, &sphereShapeDef, &fastBox.base );
 
+	// Shape disable/enable
+	b3ShapeId toggleShapeId = b3CreateSphereShape( disableId, &sphereShapeDef, &disableSphere );
+	b3Shape_Disable( toggleShapeId );
+	ENSURE( b3Shape_IsEnabled( toggleShapeId ) == false );
+	b3Shape_Enable( toggleShapeId );
+	ENSURE( b3Shape_IsEnabled( toggleShapeId ) );
+
 	// Force/impulse/torque (Vec3 args in 3D)
 	b3Body_ApplyForce( bodyId, (b3Vec3){ 0.0f, 50.0f, 0.0f }, (b3Pos){ 1.0f, 6.0f, 0.0f }, true );
 	b3Body_ApplyForceToCenter( bodyId, (b3Vec3){ 5.0f, 0.0f, 0.0f }, true );
@@ -1506,6 +1513,17 @@ static int AllOps( void )
 	b3JointId tmpJointId = b3CreateDistanceJoint( worldId, &tmpJointDef );
 	b3DestroyJoint( tmpJointId, true );
 
+	// Distance joint spring in stiffness units, from the def and the setter
+	b3DistanceJointDef stiffDef = b3DefaultDistanceJointDef();
+	stiffDef.base.bodyIdA = jb[1];
+	stiffDef.base.bodyIdB = jb[8];
+	stiffDef.length = 4.0f;
+	stiffDef.enableSpring = true;
+	stiffDef.springStiffness = 50.0f;
+	stiffDef.springDamping = 2.0f;
+	b3JointId stiffId = b3CreateDistanceJoint( worldId, &stiffDef );
+	b3DistanceJoint_SetSpringStiffness( stiffId, 80.0f, 3.0f );
+
 	// Motor joint (Vec3 velocities in 3D)
 	b3MotorJointDef motorDef = b3DefaultMotorJointDef();
 	motorDef.base.bodyIdA = jb[3];
@@ -1536,6 +1554,31 @@ static int AllOps( void )
 	b3PrismaticJoint_EnableMotor( prisId, true );
 	b3PrismaticJoint_SetMotorSpeed( prisId, 0.2f );
 	b3PrismaticJoint_SetMaxMotorForce( prisId, 8.0f );
+
+	// Cylindrical joint with full setter coverage and a tilted slide axis
+	b3CylindricalJointDef cylDef = b3DefaultCylindricalJointDef();
+	cylDef.base.bodyIdA = jb[6];
+	cylDef.base.bodyIdB = jb[8];
+	cylDef.localSlideAxisA = (b3Vec3){ 1.0f, 1.0f, 0.0f };
+	b3JointId cylId = b3CreateCylindricalJoint( worldId, &cylDef );
+	b3CylindricalJoint_EnableSpring( cylId, true );
+	b3CylindricalJoint_SetSpringHertz( cylId, 2.0f );
+	b3CylindricalJoint_SetSpringDampingRatio( cylId, 0.5f );
+	b3CylindricalJoint_SetTargetTranslation( cylId, 0.1f );
+	b3CylindricalJoint_EnableLimit( cylId, true );
+	b3CylindricalJoint_SetLimits( cylId, -1.0f, 1.0f );
+	b3CylindricalJoint_EnableMotor( cylId, true );
+	b3CylindricalJoint_SetMotorSpeed( cylId, 0.2f );
+	b3CylindricalJoint_SetMaxMotorForce( cylId, 8.0f );
+	b3CylindricalJoint_EnableAngularSpring( cylId, true );
+	b3CylindricalJoint_SetAngularSpringHertz( cylId, 2.0f );
+	b3CylindricalJoint_SetAngularSpringDampingRatio( cylId, 0.5f );
+	b3CylindricalJoint_SetTargetAngle( cylId, 0.3f );
+	b3CylindricalJoint_EnableAngularLimit( cylId, true );
+	b3CylindricalJoint_SetAngularLimits( cylId, -1.0f, 1.0f );
+	b3CylindricalJoint_EnableAngularMotor( cylId, true );
+	b3CylindricalJoint_SetAngularMotorSpeed( cylId, 0.4f );
+	b3CylindricalJoint_SetMaxMotorTorque( cylId, 6.0f );
 
 	// Spherical joint (3D-only)
 	b3SphericalJointDef sphDef = b3DefaultSphericalJointDef();

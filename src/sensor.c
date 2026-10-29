@@ -206,7 +206,8 @@ static void b3SensorTask( int startIndex, int endIndex, int workerIndex, void* c
 		b3Array_Clear( sensor->hits );
 
 		b3Body* body = b3Array_Get( world->bodies, sensorShape->bodyId );
-		if ( body->setIndex == b3_disabledSet || ( sensorShape->flags & b3_enableSensorEvents ) == 0 )
+		if ( body->setIndex == b3_disabledSet || ( sensorShape->flags & b3_enableSensorEvents ) == 0 ||
+			 b3IsShapeEnabled( sensorShape ) == false )
 		{
 			if ( sensor->overlaps1.count != 0 )
 			{

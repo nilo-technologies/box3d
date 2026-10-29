@@ -48,7 +48,9 @@ typedef struct b3World b3World;
 
 // Major recording version is bumped when writers change.
 // Major version 6 widened the body def with the safety factor.
-#define B3_REC_VERSION_MAJOR 6
+// Major version 7 added springStiffness/springDamping to the distance joint def record, plus the
+// cylindrical joint, shape enable/disable and distance joint stiffness ops.
+#define B3_REC_VERSION_MAJOR 7
 
 // Minor tracks op-stream additions that keep the 48 byte header shape.
 // Minor version 7 made the contact body sim locators persistent
@@ -196,6 +198,7 @@ typedef b3RevoluteJointDef b3RecCType_REVOLUTEJOINTDEF;
 typedef b3SphericalJointDef b3RecCType_SPHERICALJOINTDEF;
 typedef b3WeldJointDef b3RecCType_WELDJOINTDEF;
 typedef b3WheelJointDef b3RecCType_WHEELJOINTDEF;
+typedef b3CylindricalJointDef b3RecCType_CYLINDRICALJOINTDEF;
 typedef b3MoverJointDef b3RecCType_MOVERJOINTDEF;
 typedef b3PogoJointDef b3RecCType_POGOJOINTDEF;
 
@@ -268,6 +271,7 @@ void b3RecW_REVOLUTEJOINTDEF( b3RecBuffer* buf, b3RevoluteJointDef v );
 void b3RecW_SPHERICALJOINTDEF( b3RecBuffer* buf, b3SphericalJointDef v );
 void b3RecW_WELDJOINTDEF( b3RecBuffer* buf, b3WeldJointDef v );
 void b3RecW_WHEELJOINTDEF( b3RecBuffer* buf, b3WheelJointDef v );
+void b3RecW_CYLINDRICALJOINTDEF( b3RecBuffer* buf, b3CylindricalJointDef v );
 void b3RecW_MOVERJOINTDEF( b3RecBuffer* buf, b3MoverJointDef v );
 void b3RecW_POGOJOINTDEF( b3RecBuffer* buf, b3PogoJointDef v );
 

@@ -22,6 +22,8 @@ typedef enum b3ShapeFlags
 	b3_enablePreSolveEvents = 0x10,
 	// 0x20 is free, it was the enlarged AABB flag before the broad-phase marked the tree
 	b3_enableSpeculative = 0x40,
+	// Set by b3Shape_Disable: the shape has no broad-phase proxy, contacts, sensor overlaps or query hits
+	b3_isDisabled = 0x80,
 } b3ShapeFlags;
 
 typedef struct b3Shape
@@ -72,6 +74,12 @@ typedef struct b3Shape
 static inline b3SurfaceMaterial* b3GetShapeMaterials( const b3Shape* shape )
 {
 	return shape->materials != NULL ? shape->materials : (b3SurfaceMaterial*)&shape->material;
+}
+
+// False after b3Shape_Disable
+static inline bool b3IsShapeEnabled( const b3Shape* shape )
+{
+	return ( shape->flags & b3_isDisabled ) == 0;
 }
 
 void b3CreateShapeProxy( b3World* world, b3Shape* shape, b3BodyType type, b3WorldTransform transform, bool forcePairCreation );

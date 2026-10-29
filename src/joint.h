@@ -67,6 +67,8 @@ typedef struct b3DistanceJoint
 	float hertz;
 	float dampingRatio;
 	float lowerSpringForce;
+	float stiffness;
+	float damping;
 	float upperSpringForce;
 	float minLength;
 	float maxLength;
@@ -261,6 +263,58 @@ typedef struct b3PrismaticJoint
 	bool enableMotor;
 } b3PrismaticJoint;
 
+typedef struct b3CylindricalJoint
+{
+	b3Vec2 perpImpulse;
+	b3Vec2 angularImpulse;
+	float springImpulse;
+	float motorImpulse;
+	float lowerImpulse;
+	float upperImpulse;
+	float angularSpringImpulse;
+	float angularMotorImpulse;
+	float lowerAngularImpulse;
+	float upperAngularImpulse;
+
+	float hertz;
+	float dampingRatio;
+	float targetTranslation;
+	float lowerTranslation;
+	float upperTranslation;
+	float maxMotorForce;
+	float motorSpeed;
+	float angularHertz;
+	float angularDampingRatio;
+	float targetAngle;
+	float lowerAngle;
+	float upperAngle;
+	float maxMotorTorque;
+	float angularMotorSpeed;
+
+	// Rotation in joint frame A that takes the x-axis to the slide axis
+	b3Quat slideRotation;
+
+	int indexA;
+	int indexB;
+	b3Transform frameA;
+	b3Transform frameB;
+	// World rotation of the slide frame: x is the slide axis, y and z span the point-to-line rows.
+	// The rotation axis (frame A x) and the coaxial Jacobians are derived from frameA/frameB when
+	// needed rather than cached, which keeps this struct no larger than the spherical joint.
+	b3Quat slideFrameQ;
+	b3Vec3 deltaCenter;
+	float axialAngularMass;
+	b3Softness springSoftness;
+	b3Softness angularSpringSoftness;
+
+	bool enableSpring;
+	bool enableLimit;
+	bool enableMotor;
+	bool enableAngularSpring;
+	bool enableAngularLimit;
+	bool enableAngularMotor;
+} b3CylindricalJoint;
+
 typedef struct b3RevoluteJoint
 {
 	b3Vec3 linearImpulse;
@@ -424,6 +478,7 @@ typedef struct b3JointSim
 
 	union
 	{
+		b3CylindricalJoint cylindricalJoint;
 		b3DistanceJoint distanceJoint;
 		b3MotorJoint motorJoint;
 		b3MoverJoint moverJoint;
@@ -456,6 +511,7 @@ void b3GetJointReaction( b3World* world, b3JointSim* sim, float invTimeStep, flo
 
 void b3DrawJoint( b3DebugDraw* draw, b3World* world, b3Joint* joint );
 
+b3Vec3 b3GetCylindricalJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetDistanceJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetMotorJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetMoverJointForce( b3World* world, b3JointSim* base );
@@ -467,6 +523,8 @@ b3Vec3 b3GetWeldJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetWheelJointForce( b3World* world, b3JointSim* base );
 b3Vec3 b3GetVehicleWheelJointForce( b3World* world, b3JointSim* base );
 
+b3Vec3 b3GetCylindricalJointAngularImpulse( b3World* world, b3JointSim* base );
+b3Vec3 b3GetCylindricalJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetMotorJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetParallelJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetPrismaticJointTorque( b3World* world, b3JointSim* base );
@@ -475,6 +533,7 @@ b3Vec3 b3GetSphericalJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetWeldJointTorque( b3World* world, b3JointSim* base );
 b3Vec3 b3GetWheelJointTorque( b3World* world, b3JointSim* base );
 
+void b3PrepareCylindricalJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareDistanceJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareMotorJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareMoverJoint( b3JointSim* base, b3StepContext* context );
@@ -487,6 +546,7 @@ void b3PrepareWeldJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareWheelJoint( b3JointSim* base, b3StepContext* context );
 void b3PrepareVehicleWheelJoint( b3JointSim* base, b3StepContext* context );
 
+void b3WarmStartCylindricalJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartDistanceJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartMotorJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartMoverJoint( b3JointSim* base, b3StepContext* context );
@@ -499,6 +559,7 @@ void b3WarmStartWeldJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartWheelJoint( b3JointSim* base, b3StepContext* context );
 void b3WarmStartVehicleWheelJoint( b3JointSim* base, b3StepContext* context );
 
+void b3SolveCylindricalJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveDistanceJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveMotorJoint( b3JointSim* base, b3StepContext* context );
 void b3SolveMoverJoint( b3JointSim* base, b3StepContext* context );
@@ -511,6 +572,7 @@ void b3SolveWeldJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveWheelJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 void b3SolveVehicleWheelJoint( b3JointSim* base, b3StepContext* context, bool useBias );
 
+void b3DrawCylindricalJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB, float scale );
 void b3DrawDistanceJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform transformA, b3WorldTransform transformB );
 void b3DrawMoverJoint( b3DebugDraw* draw, b3World* world, b3JointSim* base, b3WorldTransform transformA,
 					   b3WorldTransform transformB );

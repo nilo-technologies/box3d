@@ -159,6 +159,35 @@ float b3DistanceJoint_GetSpringDampingRatio( b3JointId jointId )
 	return joint->dampingRatio;
 }
 
+void b3DistanceJoint_SetSpringStiffness( b3JointId jointId, float stiffness, float damping )
+{
+	B3_ASSERT( b3IsValidFloat( stiffness ) && stiffness >= 0.0f );
+	B3_ASSERT( b3IsValidFloat( damping ) && damping >= 0.0f );
+	b3World* world = b3GetWorld( jointId.world0 );
+	B3_REC( world, DistanceJointSetSpringStiffness, jointId, stiffness, damping );
+	b3JointSim* base = b3GetJointSimCheckType( jointId, b3_distanceJoint );
+	base->distanceJoint.stiffness = stiffness;
+	base->distanceJoint.damping = damping;
+}
+
+float b3DistanceJoint_GetSpringStiffness( b3JointId jointId )
+{
+	b3JointSim* base = b3GetJointSimCheckType( jointId, b3_distanceJoint );
+	return base->distanceJoint.stiffness;
+}
+
+float b3DistanceJoint_GetSpringDamping( b3JointId jointId )
+{
+	b3JointSim* base = b3GetJointSimCheckType( jointId, b3_distanceJoint );
+	return base->distanceJoint.damping;
+}
+
+// Is the spring applying force? Stiffness units override hertz.
+static bool b3IsDistanceSpringActive( const b3DistanceJoint* joint )
+{
+	return joint->hertz > 0.0f || joint->stiffness > 0.0f || joint->damping > 0.0f;
+}
+
 void b3DistanceJoint_EnableMotor( b3JointId jointId, bool enableMotor )
 {
 	b3World* world = b3GetWorld( jointId.world0 );
@@ -296,7 +325,25 @@ void b3PrepareDistanceJoint( b3JointSim* base, b3StepContext* context )
 	float k = mA + mB + b3Dot( crA, b3MulMV( iA, crA ) ) + b3Dot( crB, b3MulMV( iB, crB ) );
 	joint->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
 
-	joint->distanceSoftness = b3MakeSoft( joint->hertz, joint->dampingRatio, context->h );
+	if ( joint->stiffness > 0.0f || joint->damping > 0.0f )
+	{
+		// Soft constraint coefficients straight from stiffness k and damping c. With the effective mass
+		// m = 1/k_eff along the axis, omega^2 = k/m and 2*zeta*omega = c/m, so b3MakeSoft reduces to
+		// biasRate = k/(c + h*k) and a2 = h*(c + h*k)/m. The steady impulse per substep is then
+		// -h*(k*C + c*Cdot), exactly the requested force whatever the attached masses.
+		float h = context->h;
+		float kc = joint->damping + h * joint->stiffness;
+		float a2 = h * kc * k;
+		joint->distanceSoftness = (b3Softness){
+			.biasRate = kc > 0.0f ? joint->stiffness / kc : 0.0f,
+			.massScale = a2 / ( 1.0f + a2 ),
+			.impulseScale = 1.0f / ( 1.0f + a2 ),
+		};
+	}
+	else
+	{
+		joint->distanceSoftness = b3MakeSoft( joint->hertz, joint->dampingRatio, context->h );
+	}
 
 	if ( context->enableWarmStarting == false )
 	{
@@ -384,7 +431,7 @@ void b3SolveDistanceJoint( b3JointSim* base, b3StepContext* context, bool useBia
 	if ( joint->enableSpring && ( joint->minLength < joint->maxLength || joint->enableLimit == false ) )
 	{
 		// spring
-		if ( joint->hertz > 0.0f )
+		if ( b3IsDistanceSpringActive( joint ) )
 		{
 			// Cdot = dot(u, v + cross(w, r))
 			b3Vec3 vr = b3Add( b3Sub( vB, vA ), b3Sub( b3Cross( wB, rB ), b3Cross( wA, rA ) ) );
@@ -571,7 +618,7 @@ void b3DrawDistanceJoint( b3DebugDraw* draw, b3JointSim* base, b3WorldTransform 
 	draw->DrawPointFcn( pA, 4.0f, b3_colorWhite, draw->context );
 	draw->DrawPointFcn( pB, 4.0f, b3_colorWhite, draw->context );
 
-	if ( joint->hertz > 0.0f && joint->enableSpring )
+	if ( b3IsDistanceSpringActive( joint ) && joint->enableSpring )
 	{
 		b3Pos pRest = b3OffsetPos( pA, b3MulSV( joint->length, axis ) );
 		draw->DrawPointFcn( pRest, 4.0f, b3_colorBlue, draw->context );

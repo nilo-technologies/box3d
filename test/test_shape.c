@@ -971,6 +971,83 @@ static int ShapeFlagsTest( void )
 	return 0;
 }
 
+// A disabled shape has no contacts and is skipped by world queries, body queries and direct shape queries.
+// Enabling it restores all of them.
+static int ShapeEnableTest( void )
+{
+	b3WorldDef worldDef = b3DefaultWorldDef();
+	worldDef.gravity = (b3Vec3){ 0.0f, -10.0f, 0.0f };
+	b3WorldId worldId = b3CreateWorld( &worldDef );
+
+	b3BodyDef groundDef = b3DefaultBodyDef();
+	b3BodyId groundId = b3CreateBody( worldId, &groundDef );
+	b3BoxHull groundBox = b3MakeBoxHull( 10.0f, 0.5f, 10.0f );
+	b3ShapeDef shapeDef = b3DefaultShapeDef();
+	b3ShapeId groundShapeId = b3CreateHullShape( groundId, &shapeDef, &groundBox.base );
+
+	b3BodyDef bodyDef = b3DefaultBodyDef();
+	bodyDef.type = b3_dynamicBody;
+	bodyDef.position = (b3Pos){ 0.0f, 1.5f, 0.0f };
+	b3BodyId bodyId = b3CreateBody( worldId, &bodyDef );
+	b3BoxHull cube = b3MakeCubeHull( 0.5f );
+	b3CreateHullShape( bodyId, &shapeDef, &cube.base );
+
+	for ( int i = 0; i < 30; ++i )
+	{
+		b3World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	ENSURE( b3Shape_GetContactCapacity( groundShapeId ) > 0 );
+
+	b3Pos origin = { 5.0f, 5.0f, 5.0f };
+	b3Vec3 down = { 0.0f, -10.0f, 0.0f };
+	b3QueryFilter filter = b3DefaultQueryFilter();
+	b3Vec3 target = { 5.0f, 5.0f, 5.0f };
+	b3Vec3 closest;
+
+	ENSURE( b3World_CastRayClosest( worldId, origin, down, filter ).hit );
+	ENSURE( b3Shape_RayCast( groundShapeId, origin, down ).hit );
+	ENSURE( b3Body_CastRay( groundId, origin, down, filter, 1.0f, b3Body_GetTransform( groundId ) ).hit );
+	ENSURE( b3Body_GetClosestPoint( groundId, &closest, target ) < FLT_MAX );
+
+	b3Shape_Disable( groundShapeId );
+	ENSURE( b3Shape_IsEnabled( groundShapeId ) == false );
+	ENSURE( b3Shape_GetContactCapacity( groundShapeId ) == 0 );
+	ENSURE( b3World_CastRayClosest( worldId, origin, down, filter ).hit == false );
+	ENSURE( b3Shape_RayCast( groundShapeId, origin, down ).hit == false );
+	ENSURE( b3Body_CastRay( groundId, origin, down, filter, 1.0f, b3Body_GetTransform( groundId ) ).hit == false );
+	ENSURE( b3Body_GetClosestPoint( groundId, &closest, target ) == FLT_MAX );
+
+	// The cube falls through the disabled ground
+	for ( int i = 0; i < 30; ++i )
+	{
+		b3World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	ENSURE( b3Body_GetPosition( bodyId ).y < 0.5f );
+
+	// Body type changes and body enable keep a disabled shape out of the broad-phase
+	b3Body_Disable( groundId );
+	b3Body_Enable( groundId );
+	ENSURE( b3World_CastRayClosest( worldId, origin, down, filter ).hit == false );
+
+	b3Shape_Enable( groundShapeId );
+	ENSURE( b3Shape_IsEnabled( groundShapeId ) );
+	ENSURE( b3World_CastRayClosest( worldId, origin, down, filter ).hit );
+	ENSURE( b3Shape_RayCast( groundShapeId, origin, down ).hit );
+
+	// Contacts come back once the cube is above the ground again
+	b3Body_SetTransform( bodyId, (b3Pos){ 0.0f, 1.5f, 0.0f }, b3Quat_identity );
+	b3Body_SetLinearVelocity( bodyId, b3Vec3_zero );
+	for ( int i = 0; i < 60; ++i )
+	{
+		b3World_Step( worldId, 1.0f / 60.0f, 4 );
+	}
+	ENSURE( b3Shape_GetContactCapacity( groundShapeId ) > 0 );
+	ENSURE_SMALL( b3Body_GetPosition( bodyId ).y - 1.0f, 0.05f );
+
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
 int ShapeTest( void )
 {
 	box = b3MakeBoxHull( 1.0f, 1.0f, 1.0f );
@@ -979,6 +1056,7 @@ int ShapeTest( void )
 	RUN_SUBTEST( ShapeAABBTest );
 	RUN_SUBTEST( ShapeNameTest );
 	RUN_SUBTEST( ShapeFlagsTest );
+	RUN_SUBTEST( ShapeEnableTest );
 	// RUN_SUBTEST( PointInShapeTest );
 	RUN_SUBTEST( RayCastShapeTest );
 

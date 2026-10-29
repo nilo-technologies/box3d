@@ -1515,6 +1515,32 @@ b3PrismaticJoint_SetMotorSpeed(myJointId, speed);
 b3PrismaticJoint_SetMaxMotorForce(myJointId, force);
 ```
 
+### Cylindrical Joint
+A cylindrical joint lets body B rotate about the x-axis of local frame A and slide along
+`localSlideAxisA` (a direction in local frame A, the x-axis by default, which makes the joint
+coaxial). The x-axis of local frame B stays parallel to the x-axis of local frame A, so the joint
+has two degrees of freedom: one translation and one rotation. Both have their own spring, limit and
+motor.
+
+```c
+b3CylindricalJointDef jointDef = b3DefaultCylindricalJointDef();
+jointDef.base.bodyIdA = myBodyIdA;
+jointDef.base.bodyIdB = myBodyIdB;
+jointDef.base.localFrameA.p = b3Body_GetLocalPoint(myBodyIdA, worldPivot);
+jointDef.base.localFrameB.p = b3Body_GetLocalPoint(myBodyIdB, worldPivot);
+jointDef.enableLimit = true;
+jointDef.lowerTranslation = -1.0f;
+jointDef.upperTranslation = 1.0f;
+jointDef.enableAngularMotor = true;
+jointDef.angularMotorSpeed = 2.0f;
+jointDef.maxMotorTorque = 50.0f;
+
+b3JointId myJointId = b3CreateCylindricalJoint(myWorldId, &jointDef);
+
+float translation = b3CylindricalJoint_GetTranslation(myJointId);
+float angle       = b3CylindricalJoint_GetAngle(myJointId);
+```
+
 ### Weld Joint
 The weld joint attempts to constrain all relative motion between two
 bodies. Both translation and rotation can have spring-damper softness.

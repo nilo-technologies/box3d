@@ -14,8 +14,11 @@
 //   0x20-0x3F  body mutators
 //   0x40-0x4F  shape create/destroy
 //   0x50-0x6F  shape mutators
+//   0x70       world config overflow
+//   0x71-0x7F  cylindrical joint (create + mutators)
 //   0x80       step
-//   0x81-0x8F  mover and pogo joints
+//   0x81-0x8A  mover and pogo joints
+//   0x8B-0x8F  cylindrical joint mutators continued, distance joint stiffness
 //   0x90-0xE7  joints (create, generic, per-type)
 //   0xE8-0xEF  spatial queries
 //   0xF0-0xFF  markers
@@ -101,6 +104,33 @@ B3_REC_OP( 0x5C, ShapeSetName, RET_NONE, ARG( SHAPEID, shape ) ARG( STR, name ) 
 B3_REC_OP( 0x5D, ShapeSetMeshMaterial, RET_NONE, ARG( SHAPEID, shape ) ARG( MATERIAL, material ) ARG( I32, index ) )
 B3_REC_OP( 0x5E, ShapeSetHull, RET_NONE, ARG( SHAPEID, shape ) ARG( GEOMID, geometryId ) )
 B3_REC_OP( 0x5F, ShapeSetMesh, RET_NONE, ARG( SHAPEID, shape ) ARG( GEOMID, geometryId ) ARG( VEC3, scale ) )
+B3_REC_OP( 0x60, ShapeDisable, RET_NONE, ARG( SHAPEID, shape ) )
+B3_REC_OP( 0x61, ShapeEnable, RET_NONE, ARG( SHAPEID, shape ) )
+
+// Cylindrical joint. Added after the original joint block, so it lives in the free 0x71-0x7F and
+// 0x8B-0x8E ranges.
+B3_REC_OP( 0x71, CreateCylindricalJoint, RET_JOINTID, ARG( WORLDID, world ) ARG( CYLINDRICALJOINTDEF, def ) )
+B3_REC_OP( 0x72, CylindricalJointEnableSpring, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableSpring ) )
+B3_REC_OP( 0x73, CylindricalJointSetSpringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
+B3_REC_OP( 0x74, CylindricalJointSetSpringDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
+B3_REC_OP( 0x75, CylindricalJointSetTargetTranslation, RET_NONE, ARG( JOINTID, joint ) ARG( F32, translation ) )
+B3_REC_OP( 0x76, CylindricalJointEnableLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
+B3_REC_OP( 0x77, CylindricalJointSetLimits, RET_NONE, ARG( JOINTID, joint ) ARG( F32, lower ) ARG( F32, upper ) )
+B3_REC_OP( 0x78, CylindricalJointEnableMotor, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableMotor ) )
+B3_REC_OP( 0x79, CylindricalJointSetMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
+B3_REC_OP( 0x7A, CylindricalJointSetMaxMotorForce, RET_NONE, ARG( JOINTID, joint ) ARG( F32, force ) )
+B3_REC_OP( 0x7B, CylindricalJointEnableAngularSpring, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableSpring ) )
+B3_REC_OP( 0x7C, CylindricalJointSetAngularSpringHertz, RET_NONE, ARG( JOINTID, joint ) ARG( F32, hertz ) )
+B3_REC_OP( 0x7D, CylindricalJointSetAngularSpringDampingRatio, RET_NONE, ARG( JOINTID, joint ) ARG( F32, dampingRatio ) )
+B3_REC_OP( 0x7E, CylindricalJointSetTargetAngle, RET_NONE, ARG( JOINTID, joint ) ARG( F32, angle ) )
+B3_REC_OP( 0x7F, CylindricalJointEnableAngularLimit, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableLimit ) )
+B3_REC_OP( 0x8B, CylindricalJointSetAngularLimits, RET_NONE, ARG( JOINTID, joint ) ARG( F32, lower ) ARG( F32, upper ) )
+B3_REC_OP( 0x8C, CylindricalJointEnableAngularMotor, RET_NONE, ARG( JOINTID, joint ) ARG( BOOL, enableMotor ) )
+B3_REC_OP( 0x8D, CylindricalJointSetAngularMotorSpeed, RET_NONE, ARG( JOINTID, joint ) ARG( F32, motorSpeed ) )
+B3_REC_OP( 0x8E, CylindricalJointSetMaxMotorTorque, RET_NONE, ARG( JOINTID, joint ) ARG( F32, torque ) )
+
+// Distance joint spring in stiffness units
+B3_REC_OP( 0x8F, DistanceJointSetSpringStiffness, RET_NONE, ARG( JOINTID, joint ) ARG( F32, stiffness ) ARG( F32, damping ) )
 
 // Joint create and destroy
 B3_REC_OP( 0x90, CreateParallelJoint, RET_JOINTID, ARG( WORLDID, world ) ARG( PARALLELJOINTDEF, def ) )

@@ -547,8 +547,8 @@ static void b3SolveContinuous( b3World* world, int bodySimIndex, b3TaskContext* 
 			continue;
 		}
 
-		// No continuous collision for sensors
-		if ( fastShape->sensorIndex != B3_NULL_INDEX )
+		// No continuous collision for sensors or disabled shapes
+		if ( fastShape->sensorIndex != B3_NULL_INDEX || b3IsShapeEnabled( fastShape ) == false )
 		{
 			continue;
 		}
@@ -623,14 +623,14 @@ static void b3SolveContinuous( b3World* world, int bodySimIndex, b3TaskContext* 
 				*shapeFatAABB = b3AABB_Inflate( aabb, shape->aabbMargin );
 
 				// Regular bodies mark the hierarchy as moved using atomic operations.
-				// Bullets are handled separately at a later stage.
-				if ( isBullet == false )
-				{
-					b3BroadPhase_MarkProxyMoved( &world->broadPhase, shape->proxyKey, *shapeFatAABB );
-				}
-				else
+				// Bullets are handled separately at a later stage. Disabled shapes have no proxy.
+				if ( isBullet )
 				{
 					fastBodySim->flags |= b3_enlargeBulletBounds;
+				}
+				else if ( shape->proxyKey != B3_NULL_INDEX )
+				{
+					b3BroadPhase_MarkProxyMoved( &world->broadPhase, shape->proxyKey, *shapeFatAABB );
 				}
 			}
 
@@ -658,13 +658,13 @@ static void b3SolveContinuous( b3World* world, int bodySimIndex, b3TaskContext* 
 			{
 				*shapeFatAABB = b3AABB_Inflate( shape->aabb, shape->aabbMargin );
 
-				if ( isBullet == false )
-				{
-					b3BroadPhase_MarkProxyMoved( &world->broadPhase, shape->proxyKey, *shapeFatAABB );
-				}
-				else
+				if ( isBullet )
 				{
 					fastBodySim->flags |= b3_enlargeBulletBounds;
+				}
+				else if ( shape->proxyKey != B3_NULL_INDEX )
+				{
+					b3BroadPhase_MarkProxyMoved( &world->broadPhase, shape->proxyKey, *shapeFatAABB );
 				}
 			}
 
@@ -869,8 +869,11 @@ static void b3FinalizeBodiesTask( int startIndex, int endIndex, int workerIndex,
 				{
 					*shapeFatAABB = b3AABB_Inflate( aabb, shape->aabbMargin );
 
-					// Mark the hierarchy as moved using atomic operations.
-					b3BroadPhase_MarkProxyMoved( &world->broadPhase, shape->proxyKey, *shapeFatAABB );
+					// Mark the hierarchy as moved using atomic operations. Disabled shapes have no proxy.
+					if ( shape->proxyKey != B3_NULL_INDEX )
+					{
+						b3BroadPhase_MarkProxyMoved( &world->broadPhase, shape->proxyKey, *shapeFatAABB );
+					}
 				}
 
 				shapeId = shape->nextShapeId;
@@ -2220,6 +2223,13 @@ void b3Solve( b3World* world, b3StepContext* stepContext )
 			while ( shapeId != B3_NULL_INDEX )
 			{
 				b3Shape* shape = shapeArray + shapeId;
+
+				// Disabled shapes have no proxy
+				if ( shape->proxyKey == B3_NULL_INDEX )
+				{
+					shapeId = shape->nextShapeId;
+					continue;
+				}
 
 				int proxyKey = shape->proxyKey;
 				int proxyId = B3_PROXY_ID( proxyKey );

@@ -91,6 +91,14 @@ b3PrismaticJointDef b3DefaultPrismaticJointDef( void )
 	return def;
 }
 
+b3CylindricalJointDef b3DefaultCylindricalJointDef( void )
+{
+	b3CylindricalJointDef def = { 0 };
+	def.base = b3DefaultJointDef();
+	def.localSlideAxisA = b3Vec3_axisX;
+	return def;
+}
+
 b3RevoluteJointDef b3DefaultRevoluteJointDef( void )
 {
 	b3RevoluteJointDef def = { 0 };
@@ -479,6 +487,10 @@ b3JointId b3CreateDistanceJoint( b3WorldId worldId, const b3DistanceJointDef* de
 	joint->distanceJoint.length = b3MaxFloat( def->length, B3_LINEAR_SLOP );
 	joint->distanceJoint.hertz = def->hertz;
 	joint->distanceJoint.dampingRatio = def->dampingRatio;
+	B3_ASSERT( b3IsValidFloat( def->springStiffness ) && def->springStiffness >= 0.0f );
+	B3_ASSERT( b3IsValidFloat( def->springDamping ) && def->springDamping >= 0.0f );
+	joint->distanceJoint.stiffness = def->springStiffness;
+	joint->distanceJoint.damping = def->springDamping;
 	joint->distanceJoint.lowerSpringForce = def->lowerSpringForce;
 	joint->distanceJoint.upperSpringForce = def->upperSpringForce;
 	joint->distanceJoint.minLength = b3MaxFloat( def->minLength, B3_LINEAR_SLOP );
@@ -679,6 +691,53 @@ b3JointId b3CreatePrismaticJoint( b3WorldId worldId, const b3PrismaticJointDef* 
 
 	b3JointId jointId = { joint->jointId + 1, world->worldId, pair.joint->generation };
 	B3_REC_CREATE( world, CreatePrismaticJoint, jointId, worldId, *def );
+	return jointId;
+}
+
+b3JointId b3CreateCylindricalJoint( b3WorldId worldId, const b3CylindricalJointDef* def )
+{
+	B3_CHECK_JOINT_DEF( def );
+	B3_ASSERT( def->lowerTranslation <= def->upperTranslation );
+	B3_ASSERT( b3IsValidVec3( def->localSlideAxisA ) && b3Length( def->localSlideAxisA ) > FLT_EPSILON );
+
+	b3World* world = b3GetUnlockedWorldFromId( worldId );
+	if ( world == NULL )
+	{
+		return (b3JointId){ 0 };
+	}
+
+	b3JointPair pair = b3CreateJoint( world, &def->base, b3_cylindricalJoint );
+
+	b3JointSim* joint = pair.jointSim;
+
+	b3CylindricalJoint* cylindrical = &joint->cylindricalJoint;
+	*cylindrical = (b3CylindricalJoint){ 0 };
+	cylindrical->slideRotation = b3ComputeQuatBetweenUnitVectors( b3Vec3_axisX, b3Normalize( def->localSlideAxisA ) );
+	cylindrical->hertz = def->hertz;
+	cylindrical->dampingRatio = def->dampingRatio;
+	cylindrical->targetTranslation = def->targetTranslation;
+	cylindrical->lowerTranslation = def->lowerTranslation;
+	cylindrical->upperTranslation = def->upperTranslation;
+	cylindrical->maxMotorForce = def->maxMotorForce;
+	cylindrical->motorSpeed = def->motorSpeed;
+	cylindrical->angularHertz = def->angularHertz;
+	cylindrical->angularDampingRatio = def->angularDampingRatio;
+	cylindrical->targetAngle = b3ClampFloat( def->targetAngle, -B3_PI, B3_PI );
+	float lowerAngle = b3MinFloat( def->lowerAngle, def->upperAngle );
+	float upperAngle = b3MaxFloat( def->lowerAngle, def->upperAngle );
+	cylindrical->lowerAngle = b3ClampFloat( lowerAngle, -0.99f * B3_PI, 0.99f * B3_PI );
+	cylindrical->upperAngle = b3ClampFloat( upperAngle, -0.99f * B3_PI, 0.99f * B3_PI );
+	cylindrical->maxMotorTorque = def->maxMotorTorque;
+	cylindrical->angularMotorSpeed = def->angularMotorSpeed;
+	cylindrical->enableSpring = def->enableSpring;
+	cylindrical->enableLimit = def->enableLimit;
+	cylindrical->enableMotor = def->enableMotor;
+	cylindrical->enableAngularSpring = def->enableAngularSpring;
+	cylindrical->enableAngularLimit = def->enableAngularLimit;
+	cylindrical->enableAngularMotor = def->enableAngularMotor;
+
+	b3JointId jointId = { joint->jointId + 1, world->worldId, pair.joint->generation };
+	B3_REC_CREATE( world, CreateCylindricalJoint, jointId, worldId, *def );
 	return jointId;
 }
 
@@ -1152,6 +1211,20 @@ void b3GetJointReaction( b3World* world, b3JointSim* sim, float invTimeStep, flo
 		}
 		break;
 
+		case b3_cylindricalJoint:
+		{
+			b3CylindricalJoint* joint = &sim->cylindricalJoint;
+			b3Vec3 linear = {
+				.x = joint->springImpulse + joint->motorImpulse + joint->lowerImpulse - joint->upperImpulse,
+				.y = joint->perpImpulse.x,
+				.z = joint->perpImpulse.y,
+			};
+			linearImpulse = b3Length( linear );
+			// Same reconstruction as b3Joint_GetConstraintTorque, so torque thresholds agree with it
+			angularImpulse = b3Length( b3GetCylindricalJointAngularImpulse( world, sim ) );
+		}
+		break;
+
 		case b3_prismaticJoint:
 		{
 			b3PrismaticJoint* joint = &sim->prismaticJoint;
@@ -1265,6 +1338,9 @@ static b3Vec3 b3GetJointConstraintForce( b3World* world, b3Joint* joint )
 		case b3_parallelJoint:
 			return b3Vec3_zero;
 
+		case b3_cylindricalJoint:
+			return b3GetCylindricalJointForce( world, base );
+
 		case b3_distanceJoint:
 			return b3GetDistanceJointForce( world, base );
 
@@ -1312,6 +1388,9 @@ static b3Vec3 b3GetJointConstraintTorque( b3World* world, b3Joint* joint )
 	{
 		case b3_parallelJoint:
 			return b3GetParallelJointTorque( world, base );
+
+		case b3_cylindricalJoint:
+			return b3GetCylindricalJointTorque( world, base );
 
 		case b3_distanceJoint:
 			return b3Vec3_zero;
@@ -1379,6 +1458,31 @@ float b3Joint_GetLinearSeparation( b3JointId jointId )
 	{
 		case b3_parallelJoint:
 			return 0.0f;
+
+		case b3_cylindricalJoint:
+		{
+			b3CylindricalJoint* cylindricalJoint = &base->cylindricalJoint;
+			b3Quat slideQ = b3MulQuat( xfA.q, b3MulQuat( base->localFrameA.q, cylindricalJoint->slideRotation ) );
+			b3Vec3 axisA = b3RotateVector( slideQ, b3Vec3_axisX );
+			float translation = b3Dot( axisA, dp );
+			float perpendicularSeparation = b3Length( b3MulSub( dp, translation, axisA ) );
+			float limitSeparation = 0.0f;
+
+			if ( cylindricalJoint->enableLimit )
+			{
+				if ( translation < cylindricalJoint->lowerTranslation )
+				{
+					limitSeparation = cylindricalJoint->lowerTranslation - translation;
+				}
+
+				if ( cylindricalJoint->upperTranslation < translation )
+				{
+					limitSeparation = translation - cylindricalJoint->upperTranslation;
+				}
+			}
+
+			return sqrtf( perpendicularSeparation * perpendicularSeparation + limitSeparation * limitSeparation );
+		}
 
 		case b3_distanceJoint:
 		{
@@ -1517,6 +1621,30 @@ float b3Joint_GetAngularSeparation( b3JointId jointId )
 			return b3GetQuatAngle( relQ );
 		}
 
+		case b3_cylindricalJoint:
+		{
+			b3CylindricalJoint* cylindricalJoint = &base->cylindricalJoint;
+			b3Quat frameQA = b3MulQuat( xfA.q, base->localFrameA.q );
+			b3Quat frameQB = b3MulQuat( xfB.q, base->localFrameB.q );
+			if ( b3DotQuat( frameQA, frameQB ) < 0.0f )
+			{
+				frameQB = b3NegateQuat( frameQB );
+			}
+
+			b3Quat frameRelQ = b3InvMulQuat( frameQA, frameQB );
+			float twist = 2.0f * b3Atan2( frameRelQ.v.x, frameRelQ.s );
+			float limitSeparation = 0.0f;
+			if ( cylindricalJoint->enableAngularLimit )
+			{
+				limitSeparation = b3MaxFloat( 0.0f, cylindricalJoint->lowerAngle - twist ) +
+								  b3MaxFloat( 0.0f, twist - cylindricalJoint->upperAngle );
+			}
+
+			// Remove the free rotation about the axis
+			frameRelQ.v.x = 0.0f;
+			return b3GetQuatAngle( frameRelQ ) + limitSeparation;
+		}
+
 		case b3_distanceJoint:
 			return 0.0f;
 
@@ -1653,6 +1781,10 @@ void b3PrepareJoint( b3JointSim* joint, b3StepContext* context )
 			b3PrepareParallelJoint( joint, context );
 			break;
 
+		case b3_cylindricalJoint:
+			b3PrepareCylindricalJoint( joint, context );
+			break;
+
 		case b3_distanceJoint:
 			b3PrepareDistanceJoint( joint, context );
 			break;
@@ -1707,6 +1839,10 @@ void b3WarmStartJoint( b3JointSim* joint, b3StepContext* context )
 	{
 		case b3_parallelJoint:
 			b3WarmStartParallelJoint( joint, context );
+			break;
+
+		case b3_cylindricalJoint:
+			b3WarmStartCylindricalJoint( joint, context );
 			break;
 
 		case b3_distanceJoint:
@@ -1765,6 +1901,10 @@ void b3SolveJoint( b3JointSim* joint, b3StepContext* context, bool useBias )
 	{
 		case b3_parallelJoint:
 			b3SolveParallelJoint( joint, context );
+			break;
+
+		case b3_cylindricalJoint:
+			b3SolveCylindricalJoint( joint, context, useBias );
 			break;
 
 		case b3_distanceJoint:
@@ -1890,6 +2030,10 @@ void b3DrawJoint( b3DebugDraw* draw, b3World* world, b3Joint* joint )
 	{
 		case b3_parallelJoint:
 			b3DrawParallelJoint( draw, jointSim, transformA, transformB, scale );
+			break;
+
+		case b3_cylindricalJoint:
+			b3DrawCylindricalJoint( draw, jointSim, transformA, transformB, scale );
 			break;
 
 		case b3_distanceJoint:
