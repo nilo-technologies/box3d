@@ -1445,15 +1445,18 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 	}
 
 	// A degenerate hit in front of the accepted one could be a thin obstacle the wheel would sink
-	// through, so retry with a ray. Keep the shape hit if the ray finds nothing.
+	// through, so retry with a ray. The ray is narrower than the wheel and can pass beside what the
+	// shape cast hit, so keep the shape hit unless the ray gives a shorter suspension.
 	if ( ctx.degenerate && ( ctx.hit == false || ctx.degenerateFraction < ctx.fraction ) )
 	{
 		b3WheelCastContext shapeHit = ctx;
+		float shapeLength = startLength + shapeHit.fraction * castLength - contactOffset;
 		float rayLength = s->maxLength + radius - startLength;
 		ctx.hit = false;
 		ctx.degenerate = false;
 		b3World_CastRay( worldId, origin, b3MulSV( rayLength, down ), v->chassis.castFilter, b3WheelCastCallback, &ctx );
-		if ( ctx.hit )
+		float rayHitLength = startLength + ctx.fraction * rayLength - radius;
+		if ( ctx.hit && ( shapeHit.hit == false || rayHitLength < shapeLength ) )
 		{
 			castLength = rayLength;
 			contactOffset = radius;
