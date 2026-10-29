@@ -201,7 +201,8 @@ typedef struct b3VehicleEngine
 
 typedef enum b3VehicleTransmissionMode
 {
-	/// Shifts by rpm. Pressing reverse while stopped selects reverse.
+	/// Shifts by rpm. Pressing reverse, or the brake without forward input, while stopped selects
+	/// reverse.
 	b3_vehicleTransmissionAuto,
 
 	/// Use b3Vehicle_SetGear
@@ -388,7 +389,8 @@ typedef struct b3VehicleInput
 	/// first and selects reverse once stopped.
 	float forward;
 
-	/// 0 to 1
+	/// 0 to 1. With the automatic gearbox and no forward input, it brakes while moving forward and
+	/// selects reverse and drives backward once stopped.
 	float brake;
 
 	/// -1 full left, 1 full right

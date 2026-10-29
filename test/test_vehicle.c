@@ -878,9 +878,11 @@ static float RideHeightAt( float dt, int substeps )
 	{
 		b3World_Step( worldId, dt, substeps );
 	}
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	// Brake, then hold with the handbrake near a stop, since the brake selects reverse once stopped
 	for ( int i = 0; i < 2 * steps; ++i )
 	{
+		bool fast = b3Vehicle_GetState( vehicleId ).speed > 2.0f;
+		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
 		b3World_Step( worldId, dt, substeps );
 	}
 
@@ -982,8 +984,13 @@ static int SleepTest( void )
 	Step( worldId, 60 );
 	ENSURE( b3Vehicle_GetState( vehicleId ).speed > 1.0f );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
-	Step( worldId, 120 );
+	// Brake, then hold with the handbrake near a stop, since the brake selects reverse once stopped
+	for ( int i = 0; i < 120; ++i )
+	{
+		bool fast = b3Vehicle_GetState( vehicleId ).speed > 2.0f;
+		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
+		Step( worldId, 1 );
+	}
 	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ 0 } );
 	Step( worldId, 300 );
 	ENSURE( b3Body_IsAwake( chassisId ) == false );
@@ -1176,12 +1183,63 @@ static int TouchdownBrakeTest( void )
 	return 0;
 }
 
+// With the automatic gearbox the brake slows the car in a forward gear, then selects reverse and
+// drives backward once stopped
+static int BrakeReverseTest( void )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	Step( worldId, 60 );
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	Step( worldId, 180 );
+	ENSURE( b3Vehicle_GetState( vehicleId ).speed > 5.0f );
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	bool reversed = false;
+	float minSpeed = FLT_MAX;
+	for ( int i = 0; i < 600; ++i )
+	{
+		Step( worldId, 1 );
+		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		minSpeed = b3MinFloat( minSpeed, state.speed );
+		if ( state.speed > 2.0f )
+		{
+			// Still braking, not driving
+			ENSURE( state.gear > 0 );
+			ENSURE( state.brake == 1.0f && state.throttle == 0.0f );
+		}
+		else if ( state.gear < 0 )
+		{
+			reversed = true;
+		}
+	}
+
+	b3VehicleState state = b3Vehicle_GetState( vehicleId );
+	printf( "    brake reverse: gear %d, speed %.2f m/s, throttle %.2f\n", state.gear, minSpeed, state.throttle );
+	ENSURE( reversed );
+	ENSURE( state.gear == -1 );
+	ENSURE( state.brake == 0.0f && state.throttle == 1.0f );
+	ENSURE( minSpeed < -2.0f );
+
+	// With forward input the brake stays a brake
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .brake = 1.0f } );
+	Step( worldId, 1 );
+	ENSURE( b3Vehicle_GetState( vehicleId ).brake == 1.0f );
+
+	ENSURE( VehicleIsFinite( vehicleId ) );
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
 int VehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
 	RUN_SUBTEST( AccelerationTest );
 	RUN_SUBTEST( TractionControlTest );
 	RUN_SUBTEST( BrakingTest );
+	RUN_SUBTEST( BrakeReverseTest );
 	RUN_SUBTEST( TurningTest );
 	RUN_SUBTEST( AntiRollTest );
 	RUN_SUBTEST( SlopeHoldTest );
