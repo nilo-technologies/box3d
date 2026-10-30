@@ -235,9 +235,9 @@ typedef struct b3VehicleTurboStage
 /// Forced induction. The torque curve is multiplied by 1 plus the summed boost of the stages. All
 /// zero, as in b3DefaultVehicleDef, is a naturally aspirated engine.
 ///
-/// The pedal asks for a share of the fully boosted torque, 1 + the summed gains times the curve.
+/// The pedal asks for a share of the fully boosted torque, (1 + the summed gains) times the curve.
 /// The engine makes the first 1 / (1 + gains) of the pedal with the throttle plate alone, so boost
-/// only builds past that point, and the boost there is so far caps the torque.
+/// only builds past that point. The boost built so far caps the torque.
 ///
 /// A single turbo uses one stage. A sequential twin turbo uses a small fast stage at low rpm and a
 /// large slow stage higher up. A supercharger has no lag: an instant fraction of 1 and a parasitic
