@@ -1911,6 +1911,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	float peakTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	float tractionTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	float lateralRoom[B3_MAX_VEHICLE_WHEELS] = { 0 };
+	// With ABS, the engine braking a wheel may still take on top of its service brake
+	float absRoom[B3_MAX_VEHICLE_WHEELS];
 	b3Vec3 localCenter = b3Body_GetLocalCenter( v->chassisId );
 	float gravity = b3GravityLength( world );
 	for ( int i = 0; i < wheelCount; ++i )
@@ -1929,6 +1931,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		gripY[i] = 0.0f;
 		bool wasSticky = wheel->isSticky;
 		wheel->isSticky = false;
+		absRoom[i] = FLT_MAX;
 
 		if ( wheel->hasContact == false )
 		{
@@ -2021,11 +2024,32 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		}
 
 		// ABS caps the service brake at the torque the tire can transmit at peak grip, so the wheel
-		// settles near the peak slip instead of locking
-		if ( v->assists.abs && serviceTorque > 0.0f && wheel->isSticky == false )
+		// settles near the peak slip instead of locking. It also leaves room on the friction ellipse
+		// for the cornering force, so braking in a turn keeps the wheel rolling and the car steering.
+		// The cornering demand comes from the slip angle, not from last step's lateral force: a wheel
+		// braking hard carries little lateral force, which would read as room to brake harder still.
+		// At least 30% of the peak is always allowed. Engine braking on a driven wheel shares the cap
+		// (see the drivetrain solve below), as engine drag torque control does in a real car, so
+		// lifting or braking mid corner does not lock the driven wheels.
+		if ( v->assists.abs && wheel->isSticky == false )
 		{
-			float limit = ground * tire->longitudinalPeakFriction * load * def->radius;
-			brakeTorque -= serviceTorque - b3MinFloat( serviceTorque, limit );
+			float lateralUse = tire->lateralPeakAngle > 0.0f
+								   ? b3MinFloat( b3AbsFloat( wheel->slipAngle ) / tire->lateralPeakAngle, 1.0f )
+								   : 0.0f;
+			float room = b3MaxFloat( sqrtf( 1.0f - lateralUse * lateralUse ), 0.3f );
+			float limit = room * ground * tire->longitudinalPeakFriction * load * def->radius;
+
+			// A wheel past its peak slip needs only the sliding torque to stay locked, which is less
+			// than the cap above. Release it to half the sliding torque until it grips again.
+			float rollSign = vLong < 0.0f ? -1.0f : 1.0f;
+			if ( -rollSign * wheel->slipRatio > tire->longitudinalPeakSlip )
+			{
+				limit = b3MinFloat( limit, 0.5f * peakX * load * def->radius );
+			}
+
+			float applied = b3MinFloat( serviceTorque, limit );
+			brakeTorque -= serviceTorque - applied;
+			absRoom[i] = limit - applied;
 		}
 
 		brakeTorque += tire->rollingResistance * load * def->radius;
@@ -2236,10 +2260,14 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			float torque = shares[i] * ratio * clutchTorque;
 
 			// Drive torque has the sign of the gear ratio, so this also caps reverse. Engine braking
-			// has the opposite sign and is left alone.
+			// has the opposite sign and is left to ABS, which caps it with the service brake.
 			if ( limitTraction && wheel->hasContact && torque * ratio > 0.0f )
 			{
 				torque = b3MinFloat( b3AbsFloat( torque ), tractionTorque[i] ) * ( ratio > 0.0f ? 1.0f : -1.0f );
+			}
+			else if ( wheel->hasContact && torque * ratio < 0.0f )
+			{
+				torque = b3MinFloat( b3AbsFloat( torque ), absRoom[i] ) * ( torque > 0.0f ? 1.0f : -1.0f );
 			}
 			wheel->driveTorque = torque;
 		}

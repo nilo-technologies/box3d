@@ -383,7 +383,9 @@ typedef struct b3VehicleAssists
 	/// force, so full throttle mid corner does not spin the car.
 	bool tractionControl;
 
-	/// Caps the brake torque at what the tire can transmit at peak grip so the wheels do not lock
+	/// Caps the brake torque at what the tire can transmit at peak grip so the wheels do not lock.
+	/// It leaves room for the cornering force, so the car still steers while braking in a turn,
+	/// releases a wheel that slips past its peak, and caps engine braking on driven wheels too.
 	bool abs;
 
 	/// Downforce coefficient, force = downforce * speed^2 (N*s^2/m^2)
