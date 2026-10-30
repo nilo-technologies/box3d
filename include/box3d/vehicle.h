@@ -317,7 +317,29 @@ typedef struct b3VehicleAssists
 	float counterSteer;
 
 	/// Lateral grip multiplier on handbraked wheels at full handbrake. Below 1 makes drifting easy.
+	/// With the drift assist it also holds while the car is drifting.
 	float driftGripScale;
+
+	/// Arcade drift assist, 0 to 1. 0 disables. When the rear breaks loose at speed within half a
+	/// second of a handbrake pull or a brake, the car enters a drift and stays in it until the
+	/// slide angle stays small or the car slows down.
+	/// While drifting, the handbraked wheels keep driftGripScale grip, the steering sets the
+	/// drift angle and this fraction of a yaw assist holds it, and the front wheels follow the
+	/// slide so steering into it does not spin the car.
+	float driftAssist;
+
+	/// Drift angle the assist holds with the steering centered (radians)
+	float driftAngle;
+
+	/// Drift angle added by full steer into the drift and removed by full steer out of it (radians)
+	float driftAngleRange;
+
+	/// Largest drift angle the assist allows (radians)
+	float driftMaxAngle;
+
+	/// Fraction of the speed the tires scrub off sideways that a drift gives back at full
+	/// throttle, 0 to 1
+	float driftSpeedKeep;
 
 	/// Limits the throttle so no grounded driven wheel gets more torque than its tire can transmit
 	/// at peak grip. On wheels behind the center of mass it also leaves room for the cornering
@@ -428,6 +450,13 @@ typedef struct b3VehicleState
 
 	/// Upside down or on its side and nearly stopped for 2 seconds. See b3Vehicle_Reset.
 	bool stuck;
+
+	/// In a drift held by b3VehicleAssists::driftAssist
+	bool isDrifting;
+
+	/// Angle between the heading and the direction of travel, positive with the velocity to the
+	/// left of the heading (radians)
+	float slideAngle;
 } b3VehicleState;
 
 /// Wheel readout, updated each step
