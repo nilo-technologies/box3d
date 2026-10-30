@@ -154,6 +154,11 @@ b3VehicleDef b3DefaultVehicleDef( void )
 
 	def.assists.counterSteer = 0.2f;
 	def.assists.driftGripScale = 1.0f;
+	def.assists.driftAssist = 0.0f;
+	def.assists.driftAngle = b3DegToRad( 25.0f );
+	def.assists.driftAngleRange = b3DegToRad( 25.0f );
+	def.assists.driftMaxAngle = b3DegToRad( 55.0f );
+	def.assists.driftSpeedKeep = 0.5f;
 	def.assists.tractionControl = true;
 	def.assists.abs = false;
 	def.assists.downforce = 1.5f;
@@ -327,6 +332,11 @@ static b3VehicleAssists b3SanitizeAssists( b3VehicleAssists a )
 {
 	a.counterSteer = b3SanitizeFloat( a.counterSteer, 0.0f, 10.0f, 0.0f );
 	a.driftGripScale = b3SanitizeFloat( a.driftGripScale, 0.0f, 10.0f, 1.0f );
+	a.driftAssist = b3SanitizeFloat( a.driftAssist, 0.0f, 1.0f, 0.0f );
+	a.driftMaxAngle = b3SanitizeFloat( a.driftMaxAngle, 0.0f, 0.5f * B3_PI, 0.0f );
+	a.driftAngle = b3SanitizeFloat( a.driftAngle, 0.0f, a.driftMaxAngle, 0.0f );
+	a.driftAngleRange = b3SanitizeFloat( a.driftAngleRange, 0.0f, a.driftMaxAngle, 0.0f );
+	a.driftSpeedKeep = b3SanitizeFloat( a.driftSpeedKeep, 0.0f, 1.0f, 0.0f );
 	a.downforce = b3SanitizeFloat( a.downforce, 0.0f, FLT_MAX, 0.0f );
 	a.drag = b3SanitizeFloat( a.drag, 0.0f, FLT_MAX, 0.0f );
 	a.rollInfluence = b3SanitizeFloat( a.rollInfluence, 0.0f, 1.0f, 0.0f );
@@ -771,6 +781,11 @@ void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
 	v->steer = 0.0f;
 	v->stuckTimer = 0.0f;
 	v->stuck = false;
+	v->slideAngle = 0.0f;
+	v->driftHold = 0.0f;
+	v->driftEntryTimer = 0.0f;
+	v->driftExitTimer = 0.0f;
+	v->drifting = false;
 }
 
 void b3Vehicle_SetChassis( b3VehicleId vehicleId, b3VehicleChassis chassis )
@@ -903,6 +918,8 @@ b3VehicleState b3Vehicle_GetState( b3VehicleId vehicleId )
 	state.steerAngle = v->steer;
 	state.wheelsInContact = v->wheelsInContact;
 	state.stuck = v->stuck;
+	state.isDrifting = v->drifting;
+	state.slideAngle = v->slideAngle;
 	return state;
 }
 
@@ -1624,47 +1641,10 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	float brake = v->brake;
 	float handbrake = input->handbrake;
 
-	// Steering: speed sensitive, rate limited, with counter-steer into rear slides
-	{
-		const b3VehicleSteering* st = &v->steering;
-		float speed = b3AbsFloat( v->speed );
-		float maxAngle = st->maxAngle;
-		if ( st->speedReference > 0.0f )
-		{
-			// Falls off with speed squared like the grip limited angle
-			float x = speed / st->speedReference;
-			maxAngle /= 1.0f + x * x;
-		}
-		float target = -input->steer * maxAngle;
-
-		if ( v->assists.counterSteer > 0.0f && v->speed > 2.0f )
-		{
-			float rearOffset = 0.0f;
-			int rearCount = 0;
-			for ( int i = 0; i < wheelCount; ++i )
-			{
-				if ( v->wheels[i].def.steerFactor == 0.0f )
-				{
-					rearOffset += b3Dot( v->wheels[i].def.position, v->chassis.forward );
-					rearCount += 1;
-				}
-			}
-			rearOffset = rearCount > 0 ? rearOffset / rearCount : 0.0f;
-			b3Vec3 rearVelocity = b3Add( linearVelocity, b3Cross( angularVelocity, b3MulSV( rearOffset, forward ) ) );
-			float slide = b3Atan2( b3Dot( rearVelocity, left ), b3MaxFloat( b3Dot( rearVelocity, forward ), 0.1f ) );
-			target += v->assists.counterSteer * slide;
-		}
-
-		target = b3ClampFloat( target, -st->maxAngle, st->maxAngle );
-		bool outward = b3AbsFloat( target ) > b3AbsFloat( v->steer ) && target * v->steer >= 0.0f;
-		float rate = outward ? st->steerSpeed : st->returnSpeed;
-		float step = rate * dt;
-		v->steer += b3ClampFloat( target - v->steer, -step, step );
-	}
-
-	// Ackermann geometry
+	// Axles along the chassis forward axis: the steered wheels and the others
 	float frontOffset = 0.0f, rearOffset = 0.0f;
 	int frontCount = 0, rearCount = 0;
+	bool rearContact = false;
 	for ( int i = 0; i < wheelCount; ++i )
 	{
 		float z = b3Dot( v->wheels[i].def.position, v->chassis.forward );
@@ -1677,9 +1657,104 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		{
 			rearOffset += z;
 			rearCount += 1;
+			rearContact = rearContact || v->wheels[i].hasContact;
 		}
 	}
-	float wheelBase = frontCount > 0 && rearCount > 0 ? frontOffset / frontCount - rearOffset / rearCount : 0.0f;
+	frontOffset = frontCount > 0 ? frontOffset / frontCount : 0.0f;
+	rearOffset = rearCount > 0 ? rearOffset / rearCount : 0.0f;
+	float wheelBase = frontCount > 0 && rearCount > 0 ? frontOffset - rearOffset : 0.0f;
+
+	// Slide angles of the body and of each axle, positive with the velocity to the left of the heading
+	b3Vec3 frontVelocity = b3Add( linearVelocity, b3Cross( angularVelocity, b3MulSV( frontOffset, forward ) ) );
+	b3Vec3 rearVelocity = b3Add( linearVelocity, b3Cross( angularVelocity, b3MulSV( rearOffset, forward ) ) );
+	float frontSlide = b3Atan2( b3Dot( frontVelocity, left ), b3MaxFloat( b3Dot( frontVelocity, forward ), 0.1f ) );
+	float rearSlide = b3Atan2( b3Dot( rearVelocity, left ), b3MaxFloat( b3Dot( rearVelocity, forward ), 0.1f ) );
+	float slide = 0.0f;
+	{
+		float vx = b3Dot( linearVelocity, forward );
+		float vy = b3Dot( linearVelocity, left );
+		if ( vx * vx + vy * vy > 4.0f )
+		{
+			slide = b3Atan2( vy, vx );
+		}
+	}
+	float slideRate = b3UnwindAngle( slide - v->slideAngle ) / dt;
+	v->slideAngle = slide;
+
+	// Drift assist: a drift starts when the rear breaks loose at speed shortly after the driver
+	// pulled the handbrake or braked, so plain hard cornering does not start one. It ends when the
+	// slide angle stays small, the car slows down or it slides sideways past 90 degrees. Shortly
+	// after a drift ends the rear can start a new one, so a car that swings through straight into
+	// a slide the other way links the two drifts instead of spinning.
+	{
+		const float entryAngle = 0.2f;
+		const float entryWindow = 0.5f;
+		const float exitAngle = 0.1f;
+		const float exitTime = 0.25f;
+		const float minSpeed = 8.0f;
+		const float gripRecoveryTime = 0.4f;
+
+		bool asked = handbrake > 0.0f || brake > 0.0f || v->drifting;
+		v->driftEntryTimer = asked ? entryWindow : b3MaxFloat( v->driftEntryTimer - dt, 0.0f );
+
+		if ( v->assists.driftAssist == 0.0f )
+		{
+			v->drifting = false;
+		}
+		else if ( v->drifting == false )
+		{
+			if ( v->driftEntryTimer > 0.0f && v->speed > minSpeed && rearContact && b3AbsFloat( rearSlide ) > entryAngle )
+			{
+				v->drifting = true;
+				v->driftExitTimer = 0.0f;
+			}
+		}
+		else
+		{
+			v->driftExitTimer = b3AbsFloat( slide ) < exitAngle ? v->driftExitTimer + dt : 0.0f;
+			if ( v->driftExitTimer > exitTime || v->speed < 0.5f * minSpeed || b3AbsFloat( slide ) > 0.5f * B3_PI )
+			{
+				v->drifting = false;
+			}
+		}
+
+		// The rear grip comes back gradually after a drift, so it does not snap the car straight
+		v->driftHold = v->drifting ? 1.0f : b3MaxFloat( v->driftHold - dt / gripRecoveryTime, 0.0f );
+	}
+
+	// Steering: speed sensitive, rate limited, with counter-steer into rear slides. In a drift the
+	// front wheels follow the front axle's slide instead, so the driver's steer turns the car from
+	// the line it is sliding along.
+	{
+		const b3VehicleSteering* st = &v->steering;
+		float speed = b3AbsFloat( v->speed );
+		float maxAngle = st->maxAngle;
+		if ( st->speedReference > 0.0f )
+		{
+			// Falls off with speed squared like the grip limited angle
+			float x = speed / st->speedReference;
+			maxAngle /= 1.0f + x * x;
+		}
+		float target = -input->steer * maxAngle;
+
+		if ( v->speed > 2.0f )
+		{
+			float counter = v->assists.counterSteer * rearSlide;
+			if ( v->drifting )
+			{
+				counter = b3LerpFloat( counter, frontSlide, v->assists.driftAssist );
+			}
+			target += counter;
+		}
+
+		target = b3ClampFloat( target, -st->maxAngle, st->maxAngle );
+		bool outward = b3AbsFloat( target ) > b3AbsFloat( v->steer ) && target * v->steer >= 0.0f;
+		float rate = outward ? st->steerSpeed : st->returnSpeed;
+		float step = rate * dt;
+		v->steer += b3ClampFloat( target - v->steer, -step, step );
+	}
+
+	// Ackermann geometry
 	b3Vec3 localLeft = b3Cross( v->chassis.up, v->chassis.forward );
 
 	b3WheelFrame frames[B3_MAX_VEHICLE_WHEELS];
@@ -1812,10 +1887,12 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		float muY = ground * b3TireCurve( b3AbsFloat( wheel->slipAngle ), tire->lateralPeakAngle, tire->lateralPeakFriction,
 										  tire->lateralSlideAngle, tire->lateralSlideFriction );
 
+		// The handbrake, or a drift held by the drift assist, cuts the grip of the handbraked wheels
 		float drift = 1.0f;
-		if ( def->maxHandBrakeTorque > 0.0f && handbrake > 0.0f )
+		float hold = b3MaxFloat( handbrake, v->driftHold );
+		if ( def->maxHandBrakeTorque > 0.0f && hold > 0.0f )
 		{
-			drift = b3LerpFloat( 1.0f, v->assists.driftGripScale, handbrake );
+			drift = b3LerpFloat( 1.0f, v->assists.driftGripScale, hold );
 		}
 
 		muY *= drift;
@@ -1870,9 +1947,10 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		// On wheels behind the center of mass, traction control leaves room on the friction ellipse
 		// for the cornering force the tire carried last step, so full throttle mid corner does not
 		// spin the car. Extra drive on the front wheels only widens the line, so they keep the full
-		// peak. At least 30% of the peak is always allowed so the car can pull out of a corner.
+		// peak. At least 30% of the peak is always allowed so the car can pull out of a corner. In a
+		// drift the slide is wanted, so the throttle keeps the full peak to hold it.
 		tractionTorque[i] = peakTorque[i];
-		if ( b3Dot( b3Sub( def->position, localCenter ), v->chassis.forward ) < 0.0f )
+		if ( v->drifting == false && b3Dot( b3Sub( def->position, localCenter ), v->chassis.forward ) < 0.0f )
 		{
 			float lateralCapacity = peakY * load;
 			float lateralUse =
@@ -2112,9 +2190,52 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		}
 	}
 
+	// A drift gives back part of the speed the tires scrub off sideways, with the throttle
+	if ( v->drifting && assists->driftSpeedKeep > 0.0f && throttle > 0.0f )
+	{
+		float speed = b3Length( linearVelocity );
+		if ( speed > 1.0f )
+		{
+			b3Vec3 direction = b3MulSV( 1.0f / speed, linearVelocity );
+			float scrub = 0.0f;
+			for ( int i = 0; i < wheelCount; ++i )
+			{
+				if ( v->wheels[i].hasContact )
+				{
+					scrub -= v->wheels[i].lateralForce * b3Dot( frames[i].lateral, direction );
+				}
+			}
+
+			if ( scrub > 0.0f )
+			{
+				b3Body_ApplyForceToCenter( v->chassisId, b3MulSV( assists->driftSpeedKeep * throttle * scrub, direction ), false );
+			}
+		}
+	}
+
 	// Angular assists modify the chassis angular velocity directly
 	b3Vec3 w = angularVelocity;
 	bool modified = false;
+
+	// Drift assist: the steering sets the drift angle, centered holds driftAngle, into the drift
+	// adds up to driftAngleRange and out of it takes as much away. The handbrake asks for the
+	// largest angle. A critically damped yaw acceleration pulls the slide angle to the target.
+	if ( v->drifting && contactCount > 0 )
+	{
+		float side = slide >= 0.0f ? 1.0f : -1.0f;
+		float angle = side * slide;
+		float rate = side * slideRate;
+		float target = assists->driftAngle + assists->driftAngleRange * side * input->steer;
+		target = b3ClampFloat( target, 0.0f, assists->driftMaxAngle );
+		target = b3LerpFloat( target, assists->driftMaxAngle, handbrake );
+
+		const float frequency = 7.0f;
+		float accel = assists->driftAssist * ( frequency * frequency * ( target - angle ) - 2.0f * frequency * rate );
+
+		// Yawing away from the velocity grows the slide angle
+		w = b3MulAdd( w, -side * dt * accel, up );
+		modified = true;
+	}
 
 	if ( contactCount == 0 && assists->airControl > 0.0f )
 	{
