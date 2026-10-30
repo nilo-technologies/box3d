@@ -18,6 +18,23 @@
 #include <stddef.h>
 
 #define B3_VEHICLE_REFERENCE_FRICTION 0.6f
+
+// Launch control: it arms below this speed (m/s) and aims each driven tire at this fraction of its
+// peak slip. Its torque cap is the tire's peak torque times 1 + gain x (target - slip): at most
+// the wheel scale on the wheel itself, since a light wheel spins up at once on any torque past the
+// tire's peak, and at most the engine scale on the throttle, so the engine makes enough torque to
+// fill the wheel cap while it also revs up. It ends once the engine has not been held back for
+// this long (s).
+#define B3_LAUNCH_SPEED 1.0f
+#define B3_LAUNCH_TARGET 0.9f
+#define B3_LAUNCH_GAIN 1.0f
+#define B3_LAUNCH_WHEEL_SCALE 1.1f
+#define B3_LAUNCH_ENGINE_SCALE 2.0f
+#define B3_LAUNCH_DONE_TIME 0.3f
+
+// The slip ratio relaxation settles at no less than this speed (m/s)
+#define B3_RELAXATION_MIN_SPEED 1.0f
+
 #define B3_RPM_TO_RADIANS ( 2.0f * B3_PI / 60.0f )
 #define B3_RADIANS_TO_RPM ( 60.0f / ( 2.0f * B3_PI ) )
 #define B3_VEHICLE_RING_COUNT 12
@@ -62,6 +79,7 @@ b3VehicleWheelDef b3DefaultVehicleWheelDef( void )
 	def.tire.lateralSlideAngle = b3DegToRad( 20.0f );
 	def.tire.lateralSlideFriction = 0.92f;
 	def.tire.rollingResistance = 0.015f;
+	def.tire.longitudinalRelaxationLength = 0.3f;
 	return def;
 }
 
@@ -167,6 +185,7 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	def.assists.stickySpeed = 0.25f;
 	def.assists.stickyTime = 0.0f;
 	def.assists.brakeReverse = true;
+	def.assists.launchControl = true;
 
 	def.internalValue = B3_SECRET_COOKIE;
 	return def;
@@ -238,6 +257,7 @@ static b3VehicleWheelDef b3SanitizeWheel( b3VehicleWheelDef w )
 	t->lateralPeakFriction = b3SanitizeFloat( t->lateralPeakFriction, 0.0f, 100.0f, 0.0f );
 	t->lateralSlideFriction = b3SanitizeFloat( t->lateralSlideFriction, 0.0f, 100.0f, 0.0f );
 	t->rollingResistance = b3SanitizeFloat( t->rollingResistance, 0.0f, 10.0f, 0.0f );
+	t->longitudinalRelaxationLength = b3SanitizeFloat( t->longitudinalRelaxationLength, 0.0f, 10.0f, 0.0f );
 	return w;
 }
 
@@ -771,6 +791,7 @@ void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
 	v->steer = 0.0f;
 	v->stuckTimer = 0.0f;
 	v->stuck = false;
+	v->isLaunching = false;
 }
 
 void b3Vehicle_SetChassis( b3VehicleId vehicleId, b3VehicleChassis chassis )
@@ -903,6 +924,7 @@ b3VehicleState b3Vehicle_GetState( b3VehicleId vehicleId )
 	state.steerAngle = v->steer;
 	state.wheelsInContact = v->wheelsInContact;
 	state.stuck = v->stuck;
+	state.isLaunching = v->isLaunching;
 	return state;
 }
 
@@ -1805,7 +1827,24 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		float vLat = b3Dot( vr, frame->lateral );
 
 		float floor = driven || brakeTorque > 0.0f ? 0.1f : 4.0f;
-		wheel->slipRatio = ( wheel->omega * def->radius - vLong ) / b3MaxFloat( b3AbsFloat( vLong ), floor );
+		float slipSpeed = wheel->omega * def->radius - vLong;
+		float relaxation = tire->longitudinalRelaxationLength;
+		if ( relaxation > 0.0f )
+		{
+			// The slip ratio relaxes toward slipSpeed / speed over the relaxation length, so near rest
+			// it follows the slip distance rather than jumping with the speed ratio. Implicit, so it
+			// settles without overshoot however short the time constant relaxation / speed is.
+			// Below the minimum speed it still settles within relaxation / minimum speed, so a slip
+			// left from a wheelspin at walking pace does not linger
+			float k = dt / relaxation;
+			float relaxSpeed = b3MaxFloat( b3AbsFloat( vLong ), B3_RELAXATION_MIN_SPEED );
+			float slip = ( wheel->slipRatio + k * slipSpeed ) / ( 1.0f + k * relaxSpeed );
+			wheel->slipRatio = b3ClampFloat( slip, -100.0f, 100.0f );
+		}
+		else
+		{
+			wheel->slipRatio = slipSpeed / b3MaxFloat( b3AbsFloat( vLong ), floor );
+		}
 		wheel->slipAngle = b3Atan2( vLat, b3AbsFloat( vLong ) + 1.0f );
 
 		float ground = frame->groundScale;
@@ -1890,6 +1929,45 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		}
 	}
 
+	// Launch control: a slip controller on the driven wheels from a standstill. Traction control
+	// caps the drive torque at the tires' peak torque, but part of that torque spins up the engine
+	// and part is lost to friction, so the tires run well below their peak; without traction
+	// control nothing stops them spinning up. Launch control sets each driven wheel's cap from its
+	// slip every step instead: above the peak torque while the tire slips less than its target,
+	// below it while it slips more, so the tire settles just under its peak slip.
+	float launchTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
+	bool launching = false;
+
+	// The gearbox cuts the throttle during a shift, which is not the driver lifting
+	bool lifted = throttle == 0.0f && v->shiftTimer <= 0.0f;
+	if ( v->assists.launchControl == false || lifted || v->gear <= 0 )
+	{
+		v->isLaunching = false;
+	}
+	else if ( v->isLaunching == false && b3AbsFloat( v->speed ) < B3_LAUNCH_SPEED )
+	{
+		v->isLaunching = true;
+		v->launchTimer = 0.0f;
+	}
+
+	if ( v->isLaunching )
+	{
+		launching = true;
+		for ( int i = 0; i < wheelCount; ++i )
+		{
+			const b3VehicleWheel* wheel = v->wheels + i;
+			if ( shares[i] > 0.0f && wheel->hasContact )
+			{
+				float slip = wheel->slipRatio / wheel->def.tire.longitudinalPeakSlip;
+				float scale = b3MaxFloat( 1.0f + B3_LAUNCH_GAIN * ( B3_LAUNCH_TARGET - slip ), 0.0f );
+				tractionTorque[i] = b3MinFloat( scale, B3_LAUNCH_WHEEL_SCALE ) * peakTorque[i];
+				launchTorque[i] = b3MinFloat( scale, B3_LAUNCH_ENGINE_SCALE ) * peakTorque[i];
+			}
+		}
+	}
+
+	bool limitTraction = v->assists.tractionControl || launching;
+
 	// Implicit engine, clutch and driven wheel solve. The ground reaction from the previous step
 	// stands in for the tire load so the engine feels the car's inertia.
 	{
@@ -1940,7 +2018,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		// Traction control lowers the throttle until no grounded driven wheel gets more torque
 		// than its tire can transmit at peak grip
 		float engineThrottle = throttle;
-		if ( v->assists.tractionControl && throttle > 0.0f && clutch > 0.0f )
+		if ( limitTraction && throttle > 0.0f && clutch > 0.0f )
 		{
 			float limit = FLT_MAX;
 			for ( int i = 0; i < wheelCount; ++i )
@@ -1948,7 +2026,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 				float g = b3AbsFloat( shares[i] * ratio );
 				if ( g > 0.0f && v->wheels[i].hasContact )
 				{
-					limit = b3MinFloat( limit, tractionTorque[i] / g );
+					limit = b3MinFloat( limit, ( launching ? launchTorque[i] : tractionTorque[i] ) / g );
 				}
 			}
 
@@ -1957,6 +2035,14 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			{
 				engineThrottle = b3MinFloat( throttle, limit / full );
 			}
+		}
+
+		// Launch control is done once the engine can no longer overpower the tires
+		if ( launching )
+		{
+			bool heldBack = engineThrottle < throttle || v->shiftTimer > 0.0f;
+			v->launchTimer = heldBack ? 0.0f : v->launchTimer + h;
+			v->isLaunching = v->launchTimer < B3_LAUNCH_DONE_TIME;
 		}
 
 		float engineTorque = engineThrottle * b3EngineTorqueAt( e, rpm );
@@ -1998,7 +2084,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 			// Drive torque has the sign of the gear ratio, so this also caps reverse. Engine braking
 			// has the opposite sign and is left alone.
-			if ( v->assists.tractionControl && wheel->hasContact && torque * ratio > 0.0f )
+			if ( limitTraction && wheel->hasContact && torque * ratio > 0.0f )
 			{
 				torque = b3MinFloat( b3AbsFloat( torque ), tractionTorque[i] ) * ( ratio > 0.0f ? 1.0f : -1.0f );
 			}

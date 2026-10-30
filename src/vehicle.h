@@ -83,6 +83,10 @@ typedef struct b3Vehicle
 	int wheelsInContact;
 	bool stuck;
 	bool massDirty;
+
+	// Launch control: active flag, and how long the engine has gone without being held back
+	bool isLaunching;
+	float launchTimer;
 } b3Vehicle;
 
 b3DeclareArray( b3Vehicle );
