@@ -254,6 +254,23 @@ static b3VehicleEngine b3SanitizeEngine( b3VehicleEngine e )
 	return e;
 }
 
+static b3VehicleTurbo b3SanitizeTurbo( b3VehicleTurbo t )
+{
+	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
+	{
+		b3VehicleTurboStage* s = t.stages + i;
+		s->gain = b3SanitizeFloat( s->gain, 0.0f, 10.0f, 0.0f );
+		s->spoolRpm = b3SanitizeFloat( s->spoolRpm, 0.0f, 1e6f, 0.0f );
+		s->fullBoostRpm = b3SanitizeFloat( s->fullBoostRpm, s->spoolRpm, 1e6f, s->spoolRpm );
+		s->spoolTime = b3SanitizeFloat( s->spoolTime, 0.0f, 100.0f, 0.0f );
+		s->bleedTime = b3SanitizeFloat( s->bleedTime, 0.0f, 100.0f, 0.0f );
+	}
+
+	t.instantFraction = b3SanitizeFloat( t.instantFraction, 0.0f, 1.0f, 0.0f );
+	t.parasiticTorque = b3SanitizeFloat( t.parasiticTorque, 0.0f, FLT_MAX, 0.0f );
+	return t;
+}
+
 static b3VehicleTransmission b3SanitizeTransmission( b3VehicleTransmission t )
 {
 	if ( t.mode != b3_vehicleTransmissionAuto && t.mode != b3_vehicleTransmissionManual )
@@ -569,6 +586,7 @@ b3VehicleId b3CreateVehicle( b3WorldId worldId, const b3VehicleDef* def )
 	}
 
 	v->engine = b3SanitizeEngine( def->engine );
+	v->turbo = b3SanitizeTurbo( def->turbo );
 	v->transmission = b3SanitizeTransmission( def->transmission );
 	v->drivetrain = b3SanitizeDrivetrain( def->drivetrain, v->wheelCount );
 	v->antiRoll = b3SanitizeAntiRoll( def->antiRoll, v->wheelCount );
@@ -764,6 +782,11 @@ void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
 	}
 
 	v->engineSpeed = v->engine.idleRpm * B3_RPM_TO_RADIANS;
+	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
+	{
+		v->turboSpool[i] = 0.0f;
+	}
+	v->boost = 0.0f;
 	v->gear = 1;
 	v->shiftTimer = 0.0f;
 	v->clutchTimer = 0.0f;
@@ -817,6 +840,18 @@ void b3Vehicle_SetEngine( b3VehicleId vehicleId, b3VehicleEngine engine )
 b3VehicleEngine b3Vehicle_GetEngine( b3VehicleId vehicleId )
 {
 	return b3GetVehicle( vehicleId )->engine;
+}
+
+void b3Vehicle_SetTurbo( b3VehicleId vehicleId, b3VehicleTurbo turbo )
+{
+	b3Vehicle* v = b3GetVehicle( vehicleId );
+	v->turbo = b3SanitizeTurbo( turbo );
+	b3WakeVehicle( v );
+}
+
+b3VehicleTurbo b3Vehicle_GetTurbo( b3VehicleId vehicleId )
+{
+	return b3GetVehicle( vehicleId )->turbo;
 }
 
 void b3Vehicle_SetTransmission( b3VehicleId vehicleId, b3VehicleTransmission transmission )
@@ -896,6 +931,7 @@ b3VehicleState b3Vehicle_GetState( b3VehicleId vehicleId )
 	b3VehicleState state = { 0 };
 	state.speed = v->speed;
 	state.engineRpm = v->engineSpeed * B3_RADIANS_TO_RPM;
+	state.boost = v->boost;
 	state.gear = v->gear;
 	state.isShifting = v->shiftTimer > 0.0f;
 	state.throttle = v->throttle;
@@ -1141,6 +1177,46 @@ static float b3EngineTorqueAt( const b3VehicleEngine* e, float rpm )
 	}
 
 	return scale * e->maxTorque;
+}
+
+// Boost target of a turbo stage, 0 to 1. It eases in from the spool rpm to the full boost rpm and
+// scales with the load, as the exhaust flow does.
+static float b3TurboTarget( const b3VehicleTurboStage* s, float load, float rpm )
+{
+	float t = rpm >= s->spoolRpm ? 1.0f : 0.0f;
+	float range = s->fullBoostRpm - s->spoolRpm;
+	if ( range > 0.0f )
+	{
+		t = b3ClampFloat( ( rpm - s->spoolRpm ) / range, 0.0f, 1.0f );
+		t = t * t * ( 3.0f - 2.0f * t );
+	}
+
+	return load * t;
+}
+
+// Moves each stage's spool toward its target and returns the summed boost. Implicit, so a time
+// constant of zero or one far below the step is stable.
+static float b3UpdateTurbo( b3Vehicle* v, float throttle, float rpm, float dt )
+{
+	const b3VehicleTurbo* turbo = &v->turbo;
+	float load = turbo->antiLag ? 1.0f : throttle;
+	float boost = 0.0f;
+	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
+	{
+		const b3VehicleTurboStage* s = turbo->stages + i;
+		if ( s->gain == 0.0f )
+		{
+			v->turboSpool[i] = 0.0f;
+			continue;
+		}
+
+		float target = b3TurboTarget( s, load, rpm );
+		float tau = target > v->turboSpool[i] ? s->spoolTime : s->bleedTime;
+		v->turboSpool[i] += ( target - v->turboSpool[i] ) * dt / ( tau + dt );
+		boost += s->gain * b3LerpFloat( v->turboSpool[i], target, turbo->instantFraction );
+	}
+
+	return boost;
 }
 
 // Moves torque away from the faster side once the speed ratio passes the limited slip ratio
@@ -1937,6 +2013,16 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		float k = t->clutchStrength * clutch;
 		float rpm = v->engineSpeed * B3_RADIANS_TO_RPM;
 
+		// Forced induction scales the torque curve. A supercharger also costs torque to drive.
+		v->boost = b3UpdateTurbo( v, throttle, rpm, dt );
+		float boostScale = 1.0f + v->boost;
+		float fullBoost = 0.0f;
+		for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
+		{
+			fullBoost += v->turbo.stages[i].gain;
+		}
+		float parasiticTorque = fullBoost > 0.0f ? v->turbo.parasiticTorque * v->boost / fullBoost : 0.0f;
+
 		// Traction control lowers the throttle until no grounded driven wheel gets more torque
 		// than its tire can transmit at peak grip
 		float engineThrottle = throttle;
@@ -1952,14 +2038,14 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 				}
 			}
 
-			float full = b3EngineTorqueAt( e, rpm );
+			float full = boostScale * b3EngineTorqueAt( e, rpm );
 			if ( full > 0.0f && limit < FLT_MAX )
 			{
 				engineThrottle = b3MinFloat( throttle, limit / full );
 			}
 		}
 
-		float engineTorque = engineThrottle * b3EngineTorqueAt( e, rpm );
+		float engineTorque = engineThrottle * boostScale * b3EngineTorqueAt( e, rpm ) - parasiticTorque;
 
 		float rhs = e->inertia * v->engineSpeed + h * engineTorque;
 		float a11 = e->inertia + h * k + h * e->angularDamping;
@@ -1980,7 +2066,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			engineSpeed = floorSpeed;
 			wheelSpeed = ( b + h * k * A * floorSpeed ) / ( 1.0f + h * k * A );
 			clutchTorque = k * ( floorSpeed - wheelSpeed );
-			float available = engineThrottle * b3EngineTorqueAt( e, floorSpeed * B3_RADIANS_TO_RPM );
+			float available = engineThrottle * boostScale * b3EngineTorqueAt( e, floorSpeed * B3_RADIANS_TO_RPM );
+			available = b3MaxFloat( available - parasiticTorque, 0.0f );
 			clutchTorque = b3MinFloat( clutchTorque, available );
 		}
 
@@ -2195,7 +2282,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	}
 
 	bool revving = v->engineSpeed > 1.05f * v->engine.idleRpm * B3_RPM_TO_RADIANS;
-	if ( hasInput || spinning || revving || v->shiftTimer > 0.0f )
+	// Boost still bleeding off after a lift also counts
+	if ( hasInput || spinning || revving || v->shiftTimer > 0.0f || v->boost > 0.01f )
 	{
 		body = b3GetBodyFullId( world, v->chassisId );
 		body->sleepTime = 0.0f;

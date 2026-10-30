@@ -199,6 +199,51 @@ typedef struct b3VehicleEngine
 	float angularDamping;
 } b3VehicleEngine;
 
+/// Maximum number of turbo stages
+#define B3_MAX_VEHICLE_TURBO_STAGES 2
+
+/// One compressor stage. Its boost chases a target set by the throttle and the engine rpm, rising
+/// with the spool time and falling with the bleed time. A stage with zero gain is off.
+typedef struct b3VehicleTurboStage
+{
+	/// Torque added at full boost, as a fraction of the torque curve. 0.5 gives 1.5 times the torque.
+	float gain;
+
+	/// Rpm where boost starts to build
+	float spoolRpm;
+
+	/// Rpm where the stage reaches full boost. The boost target eases in between the two.
+	float fullBoostRpm;
+
+	/// Time constant of the boost rising toward its target, the turbo lag (s)
+	float spoolTime;
+
+	/// Time constant of the boost falling toward its target, for example when the throttle lifts (s)
+	float bleedTime;
+} b3VehicleTurboStage;
+
+/// Forced induction. The torque curve is multiplied by 1 plus the summed boost of the stages. All
+/// zero, as in b3DefaultVehicleDef, is a naturally aspirated engine.
+///
+/// A single turbo uses one stage. A sequential twin turbo uses a small fast stage at low rpm and a
+/// large slow stage higher up. A supercharger has no lag: an instant fraction of 1 and a parasitic
+/// torque for the belt drive.
+typedef struct b3VehicleTurbo
+{
+	b3VehicleTurboStage stages[B3_MAX_VEHICLE_TURBO_STAGES];
+
+	/// Fraction of the boost that follows its target with no lag. 0 for an exhaust driven turbo,
+	/// between 0 and 1 for an electrically assisted turbo, 1 for a supercharger.
+	float instantFraction;
+
+	/// Torque the engine spends driving the compressor at full boost, scaled by the boost (N*m)
+	float parasiticTorque;
+
+	/// Anti-lag: the boost target ignores the throttle, so boost holds off throttle and through
+	/// shifts. It still follows the rpm.
+	bool antiLag;
+} b3VehicleTurbo;
+
 typedef enum b3VehicleTransmissionMode
 {
 	/// Shifts by rpm. Pressing reverse while stopped selects reverse. See also
@@ -374,6 +419,7 @@ typedef struct b3VehicleDef
 	b3VehicleWheelDef wheels[B3_MAX_VEHICLE_WHEELS];
 	int wheelCount;
 	b3VehicleEngine engine;
+	b3VehicleTurbo turbo;
 	b3VehicleTransmission transmission;
 	b3VehicleDrivetrain drivetrain;
 	b3VehicleAntiRoll antiRoll;
@@ -411,6 +457,9 @@ typedef struct b3VehicleState
 	float speed;
 
 	float engineRpm;
+
+	/// Summed turbo boost. The engine makes 1 + boost times its torque curve.
+	float boost;
 
 	/// -1 reverse, 0 neutral, 1 and up forward gears
 	int gear;
@@ -578,6 +627,8 @@ B3_API void b3Vehicle_SetWheel( b3VehicleId vehicleId, int wheelIndex, b3Vehicle
 B3_API b3VehicleWheelDef b3Vehicle_GetWheel( b3VehicleId vehicleId, int wheelIndex );
 B3_API void b3Vehicle_SetEngine( b3VehicleId vehicleId, b3VehicleEngine engine );
 B3_API b3VehicleEngine b3Vehicle_GetEngine( b3VehicleId vehicleId );
+B3_API void b3Vehicle_SetTurbo( b3VehicleId vehicleId, b3VehicleTurbo turbo );
+B3_API b3VehicleTurbo b3Vehicle_GetTurbo( b3VehicleId vehicleId );
 B3_API void b3Vehicle_SetTransmission( b3VehicleId vehicleId, b3VehicleTransmission transmission );
 B3_API b3VehicleTransmission b3Vehicle_GetTransmission( b3VehicleId vehicleId );
 B3_API void b3Vehicle_SetDrivetrain( b3VehicleId vehicleId, b3VehicleDrivetrain drivetrain );

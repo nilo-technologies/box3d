@@ -57,6 +57,7 @@ typedef struct b3Vehicle
 	b3VehicleWheel wheels[B3_MAX_VEHICLE_WHEELS];
 	int wheelCount;
 	b3VehicleEngine engine;
+	b3VehicleTurbo turbo;
 	b3VehicleTransmission transmission;
 	b3VehicleDrivetrain drivetrain;
 	b3VehicleAntiRoll antiRoll;
@@ -71,6 +72,11 @@ typedef struct b3Vehicle
 	b3Matrix3 baseInertia;
 
 	float engineSpeed;
+
+	// Lagged boost of each turbo stage, 0 to 1 of the stage gain
+	float turboSpool[B3_MAX_VEHICLE_TURBO_STAGES];
+	float boost;
+
 	int gear;
 	float shiftTimer;
 	float clutchTimer;
