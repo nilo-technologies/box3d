@@ -84,8 +84,10 @@ typedef struct b3Vehicle
 	bool stuck;
 	bool massDirty;
 
-	// Launch control: active flag, and how long the engine has gone without being held back
+	// Launch control: active flag, whether a finished launch waits for the driver to lift, and how
+	// long the engine has gone without being held back
 	bool isLaunching;
+	bool launchSpent;
 	float launchTimer;
 } b3Vehicle;
 

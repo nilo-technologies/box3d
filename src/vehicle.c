@@ -792,6 +792,7 @@ void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
 	v->stuckTimer = 0.0f;
 	v->stuck = false;
 	v->isLaunching = false;
+	v->launchSpent = false;
 }
 
 void b3Vehicle_SetChassis( b3VehicleId vehicleId, b3VehicleChassis chassis )
@@ -1782,6 +1783,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	float gripY[B3_MAX_VEHICLE_WHEELS];
 	float peakTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	float tractionTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
+	float lateralRoom[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	b3Vec3 localCenter = b3Body_GetLocalCenter( v->chassisId );
 	float gravity = b3GravityLength( world );
 	for ( int i = 0; i < wheelCount; ++i )
@@ -1910,14 +1912,15 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		// for the cornering force the tire carried last step, so full throttle mid corner does not
 		// spin the car. Extra drive on the front wheels only widens the line, so they keep the full
 		// peak. At least 30% of the peak is always allowed so the car can pull out of a corner.
-		tractionTorque[i] = peakTorque[i];
+		lateralRoom[i] = 1.0f;
 		if ( b3Dot( b3Sub( def->position, localCenter ), v->chassis.forward ) < 0.0f )
 		{
 			float lateralCapacity = peakY * load;
 			float lateralUse =
 				lateralCapacity > 0.0f ? b3MinFloat( b3AbsFloat( wheel->lateralForce ) / lateralCapacity, 1.0f ) : 0.0f;
-			tractionTorque[i] *= b3MaxFloat( sqrtf( 1.0f - lateralUse * lateralUse ), 0.3f );
+			lateralRoom[i] = b3MaxFloat( sqrtf( 1.0f - lateralUse * lateralUse ), 0.3f );
 		}
+		tractionTorque[i] = lateralRoom[i] * peakTorque[i];
 
 		// Past the peak slip the tire only transmits the sliding grip, which is less than the peak
 		// torque above, so a wheel that already broke loose (for example from the load moving off it
@@ -1934,17 +1937,21 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	// and part is lost to friction, so the tires run well below their peak; without traction
 	// control nothing stops them spinning up. Launch control sets each driven wheel's cap from its
 	// slip every step instead: above the peak torque while the tire slips less than its target,
-	// below it while it slips more, so the tire settles just under its peak slip.
+	// below it while it slips more, so the tire settles just under its peak slip. Like traction
+	// control it leaves the rear tires room for the cornering force they carry.
 	float launchTorque[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	bool launching = false;
 
-	// The gearbox cuts the throttle during a shift, which is not the driver lifting
-	bool lifted = throttle == 0.0f && v->shiftTimer <= 0.0f;
+	// The driver's own input, not the throttle after the gearbox, which cuts it during a shift. A
+	// finished launch stays spent until the driver lifts, so a car still held below the arming
+	// speed (on a steep slope, against a wall) does not start a new one every step.
+	bool lifted = input->forward <= 0.0f;
 	if ( v->assists.launchControl == false || lifted || v->gear <= 0 )
 	{
 		v->isLaunching = false;
+		v->launchSpent = false;
 	}
-	else if ( v->isLaunching == false && b3AbsFloat( v->speed ) < B3_LAUNCH_SPEED )
+	else if ( v->isLaunching == false && v->launchSpent == false && b3AbsFloat( v->speed ) < B3_LAUNCH_SPEED )
 	{
 		v->isLaunching = true;
 		v->launchTimer = 0.0f;
@@ -1960,8 +1967,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			{
 				float slip = wheel->slipRatio / wheel->def.tire.longitudinalPeakSlip;
 				float scale = b3MaxFloat( 1.0f + B3_LAUNCH_GAIN * ( B3_LAUNCH_TARGET - slip ), 0.0f );
-				tractionTorque[i] = b3MinFloat( scale, B3_LAUNCH_WHEEL_SCALE ) * peakTorque[i];
-				launchTorque[i] = b3MinFloat( scale, B3_LAUNCH_ENGINE_SCALE ) * peakTorque[i];
+				tractionTorque[i] = b3MinFloat( scale, B3_LAUNCH_WHEEL_SCALE ) * lateralRoom[i] * peakTorque[i];
+				launchTorque[i] = b3MinFloat( scale, B3_LAUNCH_ENGINE_SCALE ) * lateralRoom[i] * peakTorque[i];
 			}
 		}
 	}
@@ -2043,6 +2050,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			bool heldBack = engineThrottle < throttle || v->shiftTimer > 0.0f;
 			v->launchTimer = heldBack ? 0.0f : v->launchTimer + h;
 			v->isLaunching = v->launchTimer < B3_LAUNCH_DONE_TIME;
+			v->launchSpent = v->isLaunching == false;
 		}
 
 		float engineTorque = engineThrottle * b3EngineTorqueAt( e, rpm );
