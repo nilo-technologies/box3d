@@ -107,6 +107,11 @@ typedef struct b3VehicleTire
 
 	/// Rolling resistance coefficient, a torque of coefficient * load * radius opposing spin
 	float rollingResistance;
+
+	/// Distance the tire rolls for its slip ratio to build up (m). At low speed a small difference
+	/// between the wheel and ground speed then takes a moment to become a large slip, so pulling
+	/// away does not break the tire loose at once. At speed it settles within a step. 0 is off.
+	float longitudinalRelaxationLength;
 } b3VehicleTire;
 
 /// Wheel definition
@@ -415,6 +420,11 @@ typedef struct b3VehicleAssists
 	/// With the automatic gearbox and no forward input, the brake selects reverse and drives
 	/// backward once stopped. Off, the brake only brakes and holds the car still.
 	bool brakeReverse;
+
+	/// Pulling away from a standstill, holds the driven tires at their peak slip so full throttle
+	/// neither spins them up nor leaves grip unused. Works with traction control on or off, and
+	/// ends when the throttle is released or the tires grip at full throttle with room to spare.
+	bool launchControl;
 } b3VehicleAssists;
 
 /// Vehicle definition. Use b3DefaultVehicleDef to initialize. The default is a 1300 kg rear
@@ -486,6 +496,9 @@ typedef struct b3VehicleState
 
 	/// Upside down or on its side and nearly stopped for 2 seconds. See b3Vehicle_Reset.
 	bool stuck;
+
+	/// Launch control is managing the drive torque
+	bool isLaunching;
 } b3VehicleState;
 
 /// Wheel readout, updated each step
