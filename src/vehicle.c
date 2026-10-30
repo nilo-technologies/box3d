@@ -785,6 +785,7 @@ void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
 	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
 	{
 		v->turboSpool[i] = 0.0f;
+		v->turboPressure[i] = 0.0f;
 	}
 	v->boost = 0.0f;
 	v->gear = 1;
@@ -1194,12 +1195,34 @@ static float b3TurboTarget( const b3VehicleTurboStage* s, float load, float rpm 
 	return load * t;
 }
 
-// Moves each stage's spool toward its target and returns the summed boost. Implicit, so a time
+// Share of the full boost the pedal asks for, 0 to 1. The pedal requests torque up to the fully
+// boosted peak. The engine makes the first 1 / (1 + fullBoost) of it with the throttle plate
+// alone, so boost only builds once the pedal is past that point.
+static float b3TurboLoad( float throttle, float fullBoost )
+{
+	if ( fullBoost <= 0.0f )
+	{
+		return 0.0f;
+	}
+
+	return b3ClampFloat( ( throttle * ( 1.0f + fullBoost ) - 1.0f ) / fullBoost, 0.0f, 1.0f );
+}
+
+// Time constant of the manifold pressure dumping through the blow-off valve (s)
+#define B3_TURBO_DUMP_TIME 0.1f
+
+// Updates each stage's shaft spool and delivered pressure and returns the summed boost. The shaft
+// spins down slowly off throttle while the pressure dumps fast, so a shift or a short lift keeps
+// most of the spool and the boost comes back as soon as the throttle opens. Implicit, so a time
 // constant of zero or one far below the step is stable.
-static float b3UpdateTurbo( b3Vehicle* v, float throttle, float rpm, float dt )
+static float b3UpdateTurbo( b3Vehicle* v, float throttle, float rpm, float dt, float fullBoost )
 {
 	const b3VehicleTurbo* turbo = &v->turbo;
-	float load = turbo->antiLag ? 1.0f : throttle;
+	float load = b3TurboLoad( throttle, fullBoost );
+
+	// Anti-lag keeps the shaft driven and the manifold pressurized off throttle
+	float shaftLoad = turbo->antiLag ? 1.0f : load;
+
 	float boost = 0.0f;
 	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
 	{
@@ -1207,13 +1230,41 @@ static float b3UpdateTurbo( b3Vehicle* v, float throttle, float rpm, float dt )
 		if ( s->gain == 0.0f )
 		{
 			v->turboSpool[i] = 0.0f;
+			v->turboPressure[i] = 0.0f;
 			continue;
 		}
 
-		float target = b3TurboTarget( s, load, rpm );
-		float tau = target > v->turboSpool[i] ? s->spoolTime : s->bleedTime;
-		v->turboSpool[i] += ( target - v->turboSpool[i] ) * dt / ( tau + dt );
-		boost += s->gain * b3LerpFloat( v->turboSpool[i], target, turbo->instantFraction );
+		float target = b3TurboTarget( s, shaftLoad, rpm );
+		float spool = v->turboSpool[i];
+		float tau = s->bleedTime;
+		if ( target > spool )
+		{
+			// Exhaust energy drives the shaft, so the lag is long near the boost threshold or at part
+			// load and short high in the rev range. Boost adds air and so exhaust, so the spool up
+			// gathers pace as it builds. spoolTime is the time constant at full load, the full boost
+			// rpm and half spool.
+			float rpmRatio = s->fullBoostRpm > 0.0f ? rpm / s->fullBoostRpm : 1.0f;
+			float drive = b3ClampFloat( shaftLoad * rpmRatio * ( 0.5f + spool ), 0.2f, 3.0f );
+			tau = s->spoolTime / drive;
+		}
+		spool += ( target - spool ) * dt / ( tau + dt );
+		v->turboSpool[i] = spool;
+
+		// The pressure is what the shaft makes, capped by what the pedal asks for. It fills at once
+		// and dumps within a fraction of a second.
+		float delivered = b3MinFloat( b3LerpFloat( spool, target, turbo->instantFraction ), target );
+		float pressure = v->turboPressure[i];
+		if ( delivered >= pressure )
+		{
+			pressure = delivered;
+		}
+		else
+		{
+			pressure += ( delivered - pressure ) * dt / ( B3_TURBO_DUMP_TIME + dt );
+		}
+		v->turboPressure[i] = pressure;
+
+		boost += s->gain * pressure;
 	}
 
 	return boost;
@@ -2014,18 +2065,21 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		float rpm = v->engineSpeed * B3_RADIANS_TO_RPM;
 
 		// Forced induction scales the torque curve. A supercharger also costs torque to drive.
-		v->boost = b3UpdateTurbo( v, throttle, rpm, dt );
-		float boostScale = 1.0f + v->boost;
 		float fullBoost = 0.0f;
 		for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
 		{
 			fullBoost += v->turbo.stages[i].gain;
 		}
+		v->boost = b3UpdateTurbo( v, throttle, rpm, dt, fullBoost );
+		float boostScale = 1.0f + v->boost;
 		float parasiticTorque = fullBoost > 0.0f ? v->turbo.parasiticTorque * v->boost / fullBoost : 0.0f;
 
-		// Traction control lowers the throttle until no grounded driven wheel gets more torque
-		// than its tire can transmit at peak grip
-		float engineThrottle = throttle;
+		// The pedal asks for a share of the fully boosted torque, as a multiple of the torque curve.
+		// The boost that has built so far caps it. Without a turbo this is the throttle itself.
+		float torqueScale = b3MinFloat( throttle * ( 1.0f + fullBoost ), boostScale );
+
+		// Traction control lowers the torque until no grounded driven wheel gets more than its tire
+		// can transmit at peak grip
 		if ( v->assists.tractionControl && throttle > 0.0f && clutch > 0.0f )
 		{
 			float limit = FLT_MAX;
@@ -2038,13 +2092,15 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 				}
 			}
 
-			float full = boostScale * b3EngineTorqueAt( e, rpm );
-			if ( full > 0.0f && limit < FLT_MAX )
+			float curve = b3EngineTorqueAt( e, rpm );
+			if ( curve > 0.0f && limit < FLT_MAX )
 			{
-				engineThrottle = b3MinFloat( throttle, limit / full );
+				torqueScale = b3MinFloat( torqueScale, limit / curve );
 			}
 		}
 
+		// Throttle plate opening against the boost there is, 0 to 1
+		float engineThrottle = torqueScale / boostScale;
 		float engineTorque = engineThrottle * boostScale * b3EngineTorqueAt( e, rpm ) - parasiticTorque;
 
 		float rhs = e->inertia * v->engineSpeed + h * engineTorque;
@@ -2282,8 +2338,14 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	}
 
 	bool revving = v->engineSpeed > 1.05f * v->engine.idleRpm * B3_RPM_TO_RADIANS;
-	// Boost still bleeding off after a lift also counts
-	if ( hasInput || spinning || revving || v->shiftTimer > 0.0f || v->boost > 0.01f )
+	// A turbo still spinning down after a lift also counts, so the car never sleeps on stale spool
+	bool spooled = v->boost > 0.01f;
+	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
+	{
+		spooled = spooled || v->turboSpool[i] > 0.01f;
+	}
+
+	if ( hasInput || spinning || revving || v->shiftTimer > 0.0f || spooled )
 	{
 		body = b3GetBodyFullId( world, v->chassisId );
 		body->sleepTime = 0.0f;

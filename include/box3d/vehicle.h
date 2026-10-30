@@ -202,8 +202,9 @@ typedef struct b3VehicleEngine
 /// Maximum number of turbo stages
 #define B3_MAX_VEHICLE_TURBO_STAGES 2
 
-/// One compressor stage. Its boost chases a target set by the throttle and the engine rpm, rising
-/// with the spool time and falling with the bleed time. A stage with zero gain is off.
+/// One compressor stage. Its shaft spools toward a target set by the pedal and the engine rpm and
+/// spins down with the bleed time. The boost it delivers is what the shaft makes, capped by what
+/// the pedal asks for. A stage with zero gain is off.
 typedef struct b3VehicleTurboStage
 {
 	/// Torque added at full boost, as a fraction of the torque curve. 0.5 gives 1.5 times the torque.
@@ -215,15 +216,23 @@ typedef struct b3VehicleTurboStage
 	/// Rpm where the stage reaches full boost. The boost target eases in between the two.
 	float fullBoostRpm;
 
-	/// Time constant of the boost rising toward its target, the turbo lag (s)
+	/// Turbo lag: time constant of the shaft spooling up at full load and the full boost rpm (s).
+	/// Exhaust energy drives the shaft, so the lag is longer below that rpm or at part load and
+	/// shorter above it, and the spool up gathers pace as boost builds.
 	float spoolTime;
 
-	/// Time constant of the boost falling toward its target, for example when the throttle lifts (s)
+	/// Time constant of the shaft spinning down off throttle (s). The boost itself dumps through the
+	/// blow-off valve within about 0.1 s, but a shaft still spinning brings it back as soon as the
+	/// throttle opens, so a longer bleed time keeps more boost through shifts and short lifts.
 	float bleedTime;
 } b3VehicleTurboStage;
 
 /// Forced induction. The torque curve is multiplied by 1 plus the summed boost of the stages. All
 /// zero, as in b3DefaultVehicleDef, is a naturally aspirated engine.
+///
+/// The pedal asks for a share of the fully boosted torque, 1 + the summed gains times the curve.
+/// The engine makes the first 1 / (1 + gains) of the pedal with the throttle plate alone, so boost
+/// only builds past that point, and the boost there is so far caps the torque.
 ///
 /// A single turbo uses one stage. A sequential twin turbo uses a small fast stage at low rpm and a
 /// large slow stage higher up. A supercharger has no lag: an instant fraction of 1 and a parasitic
@@ -232,15 +241,15 @@ typedef struct b3VehicleTurbo
 {
 	b3VehicleTurboStage stages[B3_MAX_VEHICLE_TURBO_STAGES];
 
-	/// Fraction of the boost that follows its target with no lag. 0 for an exhaust driven turbo,
-	/// between 0 and 1 for an electrically assisted turbo, 1 for a supercharger.
+	/// Fraction of the shaft spool that follows its target with no lag. 0 for an exhaust driven
+	/// turbo, between 0 and 1 for an electrically assisted turbo, 1 for a supercharger.
 	float instantFraction;
 
 	/// Torque the engine spends driving the compressor at full boost, scaled by the boost (N*m)
 	float parasiticTorque;
 
-	/// Anti-lag: the boost target ignores the throttle, so boost holds off throttle and through
-	/// shifts. It still follows the rpm.
+	/// Anti-lag: the shaft and the manifold pressure ignore the pedal, so boost holds off throttle
+	/// and through shifts. They still follow the rpm.
 	bool antiLag;
 } b3VehicleTurbo;
 

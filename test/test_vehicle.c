@@ -1332,6 +1332,80 @@ static float RevBoost( const b3VehicleTurbo* turbo, float throttleTime, float li
 	return boost;
 }
 
+// Revs the engine in neutral with the pedal held at the given position and returns the boost
+// after the given time
+static float NeutralBoost( const b3VehicleTurbo* turbo, float pedal, float time )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.turbo = *turbo;
+	def.transmission.mode = b3_vehicleTransmissionManual;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 60 );
+	b3Vehicle_SetGear( vehicleId, 0 );
+	Step( worldId, 30 );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = pedal } );
+	Step( worldId, (int)( time / VEHICLE_DT + 0.5f ) );
+	float boost = b3Vehicle_GetState( vehicleId ).boost;
+	b3DestroyWorld( worldId );
+	return boost;
+}
+
+// Spools the turbo fully in neutral, eases the pedal below the boost gate for the given time so
+// the engine keeps revving with no boost asked for, then opens it again for one step. Returns
+// the boost while eased and after reopening.
+static void LiftAndReopen( const b3VehicleTurbo* turbo, float liftTime, float* eased, float* reopened )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.turbo = *turbo;
+	def.transmission.mode = b3_vehicleTransmissionManual;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 60 );
+	b3Vehicle_SetGear( vehicleId, 0 );
+	Step( worldId, 30 );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	Step( worldId, 180 );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 0.5f } );
+	Step( worldId, (int)( liftTime / VEHICLE_DT + 0.5f ) );
+	*eased = b3Vehicle_GetState( vehicleId ).boost;
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	Step( worldId, 1 );
+	*reopened = b3Vehicle_GetState( vehicleId ).boost;
+	b3DestroyWorld( worldId );
+}
+
+// Time from full throttle in neutral until the boost reaches 80% of the gain, for an engine with
+// the given rev limit
+static float SpoolTimeAt( const b3VehicleTurbo* turbo, float maxRpm )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.turbo = *turbo;
+	def.engine.maxRpm = maxRpm;
+	def.transmission.mode = b3_vehicleTransmissionManual;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 60 );
+	b3Vehicle_SetGear( vehicleId, 0 );
+	Step( worldId, 30 );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	float time = -1.0f;
+	for ( int i = 0; i < 600; ++i )
+	{
+		Step( worldId, 1 );
+		if ( b3Vehicle_GetState( vehicleId ).boost >= 0.8f * turbo->stages[0].gain )
+		{
+			time = ( i + 1 ) * VEHICLE_DT;
+			break;
+		}
+	}
+	b3DestroyWorld( worldId );
+	return time;
+}
+
 static int TurboTest( void )
 {
 	// Naturally aspirated by default
@@ -1372,9 +1446,36 @@ static int TurboTest( void )
 	ENSURE( spooled > 0.9f * 0.5f );
 	ENSURE( instant > 0.9f * 0.5f );
 
-	// Lifting bleeds the boost off within a few bleed time constants
+	// Lifting dumps the boost through the blow-off valve
 	float bled = RevBoost( &turbo, 2.0f, 0.5f );
 	ENSURE( bled < 0.05f );
+
+	// but the shaft keeps spinning: with a long bleed time the boost is back the moment the pedal
+	// opens again after a short lift, with a short one the turbo has to spool up again
+	b3VehicleTurbo slowBleed = turbo;
+	slowBleed.stages[0].bleedTime = 1.5f;
+	float easedSlow, reopenedSlow, easedFast, reopenedFast;
+	LiftAndReopen( &slowBleed, 0.3f, &easedSlow, &reopenedSlow );
+	LiftAndReopen( &turbo, 0.3f, &easedFast, &reopenedFast );
+	printf( "    after a 0.3 s lift: boost %.2f, reopened %.2f with a 1.5 s bleed, %.2f with 0.15 s\n", easedSlow,
+			reopenedSlow, reopenedFast );
+	ENSURE( easedSlow < 0.05f && easedFast < 0.05f );
+	ENSURE( reopenedSlow > 0.7f * 0.5f );
+	ENSURE( reopenedFast < 0.3f * 0.5f );
+
+	// Part pedal: the engine makes the first 1 / 1.5 of the pedal without boost. At 80% the pedal
+	// asks for 0.4 of the full boost, and spools toward it slower than at full load.
+	float partBoost = NeutralBoost( &turbo, 0.6f, 2.0f );
+	float moreBoost = NeutralBoost( &turbo, 0.8f, 2.0f );
+	printf( "    boost at 60%% pedal %.2f, at 80%% %.2f\n", partBoost, moreBoost );
+	ENSURE( partBoost == 0.0f );
+	ENSURE( moreBoost > 0.05f && moreBoost <= 0.4f * 0.5f + 1e-4f );
+
+	// Exhaust energy drives the shaft, so the same turbo spools faster on an engine revving higher
+	float lowRev = SpoolTimeAt( &turbo, 4500.0f );
+	float highRev = SpoolTimeAt( &turbo, 9000.0f );
+	printf( "    time to 80%% boost: %.2f s on a 4500 rpm engine, %.2f s on a 9000 rpm one\n", lowRev, highRev );
+	ENSURE( lowRev > 0.0f && highRev > 0.0f && highRev < 0.75f * lowRev );
 
 	// A sequential twin sums its stages
 	b3VehicleTurbo twin = turbo;

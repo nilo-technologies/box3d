@@ -73,8 +73,10 @@ typedef struct b3Vehicle
 
 	float engineSpeed;
 
-	// Lagged boost of each turbo stage, 0 to 1 of the stage gain
+	// Per turbo stage, 0 to 1 of the stage gain: the shaft spool, which spins down slowly, and the
+	// delivered manifold pressure, which dumps fast when the throttle closes
 	float turboSpool[B3_MAX_VEHICLE_TURBO_STAGES];
+	float turboPressure[B3_MAX_VEHICLE_TURBO_STAGES];
 	float boost;
 
 	int gear;
