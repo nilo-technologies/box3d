@@ -238,12 +238,14 @@ static int AccelerationTest( void )
 
 // A full throttle launch from rest, with and without traction control. forward is 1 to launch
 // forward and -1 to launch in reverse. Returns the largest driven wheel slip in that direction.
+// Launch control is off so this measures traction control alone.
 static float LaunchSlip( bool tractionControl, float forward )
 {
 	b3WorldId worldId = CreateVehicleWorld( 1 );
 	CreateFlatGround( worldId );
 	b3VehicleDef def = b3DefaultVehicleDef();
 	def.assists.tractionControl = tractionControl;
+	def.assists.launchControl = false;
 	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
 
@@ -264,12 +266,14 @@ static float LaunchSlip( bool tractionControl, float forward )
 }
 
 // Full throttle at full lock from 70 km/h. Returns the largest chassis sideslip angle in degrees.
+// Launch control is off so it cannot still be active when the corner starts.
 static float PowerOversteer( bool tractionControl )
 {
 	b3WorldId worldId = CreateVehicleWorld( 1 );
 	CreateFlatGround( worldId );
 	b3VehicleDef def = b3DefaultVehicleDef();
 	def.assists.tractionControl = tractionControl;
+	def.assists.launchControl = false;
 	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
 	Step( worldId, 60 );
@@ -322,6 +326,147 @@ static int TractionControlTest( void )
 			cornerWithout );
 	ENSURE( cornerWith >= 0.0f && cornerWith < 15.0f );
 	ENSURE( cornerWithout > 30.0f );
+	return 0;
+}
+
+typedef struct LaunchResult
+{
+	float maxSlip;
+	float launchSlip;
+	float time60;
+	bool sawLaunching;
+	bool endedWhileHeld;
+	bool clearedOnLift;
+	bool finite;
+} LaunchResult;
+
+// Full throttle from rest for 8 s, then a lift. Records the largest driven wheel slip ratio over
+// the run and while launch control is active, the time to 60 km/h and what the launch control
+// state did. Launch control hands back once the tires grip, so a gear change later on can still
+// spin them for a moment when traction control is off.
+static LaunchResult LaunchRun( bool launchControl, bool tractionControl )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.assists.launchControl = launchControl;
+	def.assists.tractionControl = tractionControl;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 120 );
+
+	LaunchResult result = { 0.0f, 0.0f, -1.0f, false, false, false, false };
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	for ( int i = 0; i < 480; ++i )
+	{
+		Step( worldId, 1 );
+		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		for ( int j = 2; j < 4; ++j )
+		{
+			float slip = b3Vehicle_GetWheelState( vehicleId, j ).slipRatio;
+			result.maxSlip = b3MaxFloat( result.maxSlip, slip );
+			if ( state.isLaunching )
+			{
+				result.launchSlip = b3MaxFloat( result.launchSlip, slip );
+			}
+		}
+
+		result.sawLaunching = result.sawLaunching || state.isLaunching;
+		result.endedWhileHeld = result.sawLaunching && state.isLaunching == false;
+		if ( result.time60 < 0.0f && state.speed >= 60.0f * KMH )
+		{
+			result.time60 = ( i + 1 ) * VEHICLE_DT;
+		}
+	}
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ 0 } );
+	Step( worldId, 1 );
+	result.clearedOnLift = b3Vehicle_GetState( vehicleId ).isLaunching == false;
+	result.finite = VehicleIsFinite( vehicleId );
+	b3DestroyWorld( worldId );
+	return result;
+}
+
+// Launch control holds the driven tires near their peak slip from rest, with traction control on
+// or off, and hands back once the tires grip
+static int LaunchControlTest( void )
+{
+	b3VehicleDef def = b3DefaultVehicleDef();
+	ENSURE( def.assists.launchControl );
+	float peakSlip = def.wheels[2].tire.longitudinalPeakSlip;
+
+	LaunchResult with = LaunchRun( true, false );
+	LaunchResult without = LaunchRun( false, false );
+	printf( "    no traction control: launch slip %.2f with launch control, %.2f without (peak %.2f)\n", with.launchSlip,
+			without.maxSlip, peakSlip );
+	ENSURE( with.launchSlip < 2.0f * peakSlip );
+	ENSURE( without.maxSlip > 1.0f );
+	ENSURE( with.finite && without.finite );
+	ENSURE( with.sawLaunching && with.endedWhileHeld && with.clearedOnLift );
+	ENSURE( without.sawLaunching == false );
+
+	// Traction control alone leaves grip unused on a launch; launch control is no slower
+	LaunchResult both = LaunchRun( true, true );
+	LaunchResult tractionOnly = LaunchRun( false, true );
+	printf( "    0-60 km/h %.2f s with launch control, %.2f s with traction control alone\n", both.time60,
+			tractionOnly.time60 );
+	ENSURE( both.finite && tractionOnly.finite );
+	ENSURE( both.time60 > 0.0f && tractionOnly.time60 > 0.0f );
+	ENSURE( both.time60 <= tractionOnly.time60 );
+	return 0;
+}
+
+// The slip ratio builds up over the relaxation length instead of jumping when the car pulls away,
+// and at speed it settles at the plain ratio
+static int SlipRelaxationTest( void )
+{
+	float early[2];
+	float relaxations[2] = { 0.0f, 0.3f };
+	for ( int k = 0; k < 2; ++k )
+	{
+		b3WorldId worldId = CreateVehicleWorld( 1 );
+		CreateFlatGround( worldId );
+		b3VehicleDef def = b3DefaultVehicleDef();
+		def.assists.launchControl = false;
+		def.assists.tractionControl = false;
+		for ( int j = 0; j < def.wheelCount; ++j )
+		{
+			def.wheels[j].tire.longitudinalRelaxationLength = relaxations[k];
+		}
+		b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+		Step( worldId, 120 );
+
+		// The largest driven slip over the first 0.05 s of full throttle
+		early[k] = 0.0f;
+		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+		for ( int i = 0; i < 3; ++i )
+		{
+			Step( worldId, 1 );
+			for ( int j = 2; j < 4; ++j )
+			{
+				early[k] = b3MaxFloat( early[k], b3Vehicle_GetWheelState( vehicleId, j ).slipRatio );
+			}
+		}
+
+		// Cruise, then compare the reported slip with the plain ratio
+		if ( k == 1 )
+		{
+			b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 0.3f } );
+			Step( worldId, 360 );
+			float speed = b3Vehicle_GetState( vehicleId ).speed;
+			b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, 2 );
+			float plain = ( ws.angularVelocity * def.wheels[2].radius - speed ) / speed;
+			printf( "    at %.1f m/s: slip %.4f, plain ratio %.4f\n", speed, ws.slipRatio, plain );
+			ENSURE( speed > 10.0f );
+			ENSURE( fabsf( ws.slipRatio - plain ) < 0.02f );
+		}
+
+		ENSURE( VehicleIsFinite( vehicleId ) );
+		b3DestroyWorld( worldId );
+	}
+
+	printf( "    slip 0.05 s into a full throttle launch: %.2f instant, %.2f relaxed\n", early[0], early[1] );
+	ENSURE( early[0] > 1.0f );
+	ENSURE( early[1] < 0.5f * early[0] );
 	return 0;
 }
 
@@ -1252,6 +1397,8 @@ int VehicleTest( void )
 	RUN_SUBTEST( RideHeightTest );
 	RUN_SUBTEST( AccelerationTest );
 	RUN_SUBTEST( TractionControlTest );
+	RUN_SUBTEST( LaunchControlTest );
+	RUN_SUBTEST( SlipRelaxationTest );
 	RUN_SUBTEST( BrakingTest );
 	RUN_SUBTEST( BrakeReverseTest );
 	RUN_SUBTEST( TurningTest );
