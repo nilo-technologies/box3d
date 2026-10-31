@@ -529,7 +529,12 @@ static float BrakeTurn( bool abs, float* heading )
 
 	int maxGear = 0;
 	bool inOrder;
-	AccelerateTo( worldId, vehicleId, 90.0f * KMH, 30.0f, &maxGear, &inOrder );
+	if ( AccelerateTo( worldId, vehicleId, 90.0f * KMH, 30.0f, &maxGear, &inOrder ) < 0.0f )
+	{
+		*heading = 0.0f;
+		b3DestroyWorld( worldId );
+		return -1.0f;
+	}
 
 	b3Vec3 forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
 	float yaw0 = atan2f( forward.x, forward.z );

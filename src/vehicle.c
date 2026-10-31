@@ -2030,7 +2030,9 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		// braking hard carries little lateral force, which would read as room to brake harder still.
 		// At least 30% of the peak is always allowed. Engine braking on a driven wheel shares the cap
 		// (see the drivetrain solve below), as engine drag torque control does in a real car, so
-		// lifting or braking mid corner does not lock the driven wheels.
+		// lifting or braking mid corner does not lock the driven wheels. Rolling resistance acts
+		// through the same brake row, so it comes out of the cap too.
+		float rolling = tire->rollingResistance * load * def->radius;
 		if ( v->assists.abs && wheel->isSticky == false )
 		{
 			float lateralUse = tire->lateralPeakAngle > 0.0f
@@ -2047,12 +2049,13 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 				limit = b3MinFloat( limit, 0.5f * peakX * load * def->radius );
 			}
 
+			limit = b3MaxFloat( limit - rolling, 0.0f );
 			float applied = b3MinFloat( serviceTorque, limit );
 			brakeTorque -= serviceTorque - applied;
 			absRoom[i] = limit - applied;
 		}
 
-		brakeTorque += tire->rollingResistance * load * def->radius;
+		brakeTorque += rolling;
 		wheel->brakeTorque = brakeTorque;
 		frictionY[i] = muY;
 		gripX[i] = peakX;
@@ -2247,6 +2250,29 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			clutchTorque = b3MinFloat( clutchTorque, available );
 		}
 
+		// ABS caps engine braking at the room the service brake left each grounded driven wheel.
+		// The clutch slips at the cap, so the engine only feels the torque the wheels take.
+		if ( clutchTorque < 0.0f )
+		{
+			float limit = FLT_MAX;
+			for ( int i = 0; i < wheelCount; ++i )
+			{
+				float g = b3AbsFloat( shares[i] * ratio );
+				if ( g > 0.0f && v->wheels[i].hasContact )
+				{
+					limit = b3MinFloat( limit, absRoom[i] / g );
+				}
+			}
+
+			if ( limit < -clutchTorque )
+			{
+				clutchTorque = -limit;
+				engineSpeed = ( e->inertia * v->engineSpeed + h * ( engineTorque - clutchTorque ) ) /
+							  ( e->inertia + h * e->angularDamping );
+				engineSpeed = b3MaxFloat( engineSpeed, floorSpeed );
+			}
+		}
+
 		engineSpeed = b3MinFloat( engineSpeed, 1.05f * e->maxRpm * B3_RPM_TO_RADIANS );
 		v->engineSpeed = b3IsValidFloat( engineSpeed ) ? engineSpeed : idle;
 		if ( b3IsValidFloat( clutchTorque ) == false )
@@ -2260,14 +2286,10 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 			float torque = shares[i] * ratio * clutchTorque;
 
 			// Drive torque has the sign of the gear ratio, so this also caps reverse. Engine braking
-			// has the opposite sign and is left to ABS, which caps it with the service brake.
+			// has the opposite sign and was capped by ABS above.
 			if ( limitTraction && wheel->hasContact && torque * ratio > 0.0f )
 			{
 				torque = b3MinFloat( b3AbsFloat( torque ), tractionTorque[i] ) * ( ratio > 0.0f ? 1.0f : -1.0f );
-			}
-			else if ( wheel->hasContact && torque * ratio < 0.0f )
-			{
-				torque = b3MinFloat( b3AbsFloat( torque ), absRoom[i] ) * ( torque > 0.0f ? 1.0f : -1.0f );
 			}
 			wheel->driveTorque = torque;
 		}
