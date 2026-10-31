@@ -515,6 +515,63 @@ static int BrakingTest( void )
 	return 0;
 }
 
+// Full brake and full lock from 90 km/h for 1.5 s: the share of steps with a front wheel locked
+// and the heading change
+static float BrakeTurn( bool abs, float* heading )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.assists.abs = abs;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	Step( worldId, 60 );
+
+	int maxGear = 0;
+	bool inOrder;
+	AccelerateTo( worldId, vehicleId, 90.0f * KMH, 30.0f, &maxGear, &inOrder );
+
+	b3Vec3 forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
+	float yaw0 = atan2f( forward.x, forward.z );
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f, .steer = 1.0f } );
+	int locked = 0;
+	int steps = 90;
+	for ( int i = 0; i < steps; ++i )
+	{
+		Step( worldId, 1 );
+		for ( int j = 0; j < 2; ++j )
+		{
+			if ( b3Vehicle_GetWheelState( vehicleId, j ).slipRatio < -0.5f )
+			{
+				locked += 1;
+				break;
+			}
+		}
+	}
+
+	forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
+	float turn = atan2f( forward.x, forward.z ) - yaw0;
+	*heading = fabsf( atan2f( sinf( turn ), cosf( turn ) ) );
+	bool finite = VehicleIsFinite( vehicleId );
+	b3DestroyWorld( worldId );
+	return finite ? (float)locked / steps : -1.0f;
+}
+
+// ABS leaves room for the cornering force, so braking at full lock keeps the front wheels rolling
+// and the car turns. Without ABS the fronts lock and the car slides on.
+static int BrakeTurnTest( void )
+{
+	float plainHeading, absHeading;
+	float plain = BrakeTurn( false, &plainHeading );
+	float abs = BrakeTurn( true, &absHeading );
+	printf( "    brake at full lock: fronts locked %.0f%% of the time, turned %.0f deg; with abs %.0f%%, %.0f deg\n",
+			100.0f * plain, plainHeading * B3_RAD_TO_DEG, 100.0f * abs, absHeading * B3_RAD_TO_DEG );
+	ENSURE( plain > 0.5f );
+	ENSURE( 0.0f <= abs && abs < 0.1f );
+	ENSURE( absHeading > 1.2f * plainHeading );
+	return 0;
+}
+
 static float TurnRadius( const b3VehicleDef* def, float steer, float speed, float* maxRoll )
 {
 	b3WorldId worldId = CreateVehicleWorld( 1 );
@@ -1667,6 +1724,7 @@ int VehicleTest( void )
 	RUN_SUBTEST( LaunchControlTest );
 	RUN_SUBTEST( SlipRelaxationTest );
 	RUN_SUBTEST( BrakingTest );
+	RUN_SUBTEST( BrakeTurnTest );
 	RUN_SUBTEST( BrakeReverseTest );
 	RUN_SUBTEST( TurningTest );
 	RUN_SUBTEST( AntiRollTest );
