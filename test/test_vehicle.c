@@ -236,6 +236,83 @@ static int AccelerationTest( void )
 	return 0;
 }
 
+// Pulling away at full throttle, the engine spins up to the launch rpm over a few steps rather
+// than jumping there, and the revs climb with the road speed while the clutch slips instead of
+// holding flat until it locks.
+static int LaunchRevsTest( void )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 120 );
+
+	float idle = def.engine.idleRpm;
+	float launch = idle + 0.35f * ( def.engine.maxRpm - def.engine.idleRpm );
+	ENSURE( b3Vehicle_GetState( vehicleId ).engineRpm < idle + 50.0f );
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	Step( worldId, 1 );
+	float firstStep = b3Vehicle_GetState( vehicleId ).engineRpm;
+
+	// The rpm at 0.4 s, once the engine has spun up, and at 0.8 s, both while the wheels in
+	// first still turn slower than the engine, so the clutch slips
+	Step( worldId, 23 );
+	b3VehicleState early = b3Vehicle_GetState( vehicleId );
+	Step( worldId, 24 );
+	b3VehicleState late = b3Vehicle_GetState( vehicleId );
+	b3VehicleWheelState wheel = b3Vehicle_GetWheelState( vehicleId, 2 );
+	float wheelRpm = wheel.angularVelocity * def.transmission.gearRatios[0] * def.transmission.finalDrive * 60.0f /
+					 ( 2.0f * B3_PI );
+
+	printf( "    launch rpm %.0f: %.0f after one step, %.0f at 0.4 s (%.0f km/h), %.0f at 0.8 s (%.0f km/h, wheels at "
+			"%.0f rpm)\n",
+			launch, firstStep, early.engineRpm, early.speed / KMH, late.engineRpm, late.speed / KMH, wheelRpm );
+	ENSURE( firstStep < idle + 0.5f * ( launch - idle ) );
+	ENSURE( early.engineRpm > idle + 0.6f * ( launch - idle ) );
+	ENSURE( late.gear == 1 && wheelRpm < late.engineRpm - 100.0f );
+	ENSURE( late.engineRpm > early.engineRpm + 150.0f );
+	ENSURE( VehicleIsFinite( vehicleId ) );
+
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
+// A standing start held in top gear with the manual gearbox. The clutch slips just above idle, so
+// the car bogs and creeps away rather than revving to the launch rpm.
+static int HighGearStartTest( void )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleDef def = b3DefaultVehicleDef();
+	def.transmission.mode = b3_vehicleTransmissionManual;
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 120 );
+	b3Vehicle_SetGear( vehicleId, def.transmission.gearCount );
+	Step( worldId, 30 );
+
+	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	float maxRpm = 0.0f;
+	for ( int i = 0; i < 120; ++i )
+	{
+		Step( worldId, 1 );
+		maxRpm = b3MaxFloat( maxRpm, b3Vehicle_GetState( vehicleId ).engineRpm );
+	}
+
+	b3VehicleState state = b3Vehicle_GetState( vehicleId );
+	float idle = def.engine.idleRpm;
+	float launch = idle + 0.35f * ( def.engine.maxRpm - def.engine.idleRpm );
+	printf( "    top gear start: at most %.0f rpm (launch rpm %.0f), %.1f km/h after 2 s\n", maxRpm, launch,
+			state.speed / KMH );
+	ENSURE( state.gear == def.transmission.gearCount );
+	ENSURE( maxRpm < idle + 0.5f * ( launch - idle ) );
+	ENSURE( state.speed > 1.0f * KMH );
+	ENSURE( VehicleIsFinite( vehicleId ) );
+
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
 // A full throttle launch from rest, with and without traction control. forward is 1 to launch
 // forward and -1 to launch in reverse. Returns the largest driven wheel slip in that direction.
 // Launch control is off so this measures traction control alone.
@@ -435,10 +512,11 @@ static int SlipRelaxationTest( void )
 		b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 		Step( worldId, 120 );
 
-		// The largest driven slip over the first 0.05 s of full throttle
+		// The largest driven slip over the first 0.1 s of full throttle, which leaves the engine time
+		// to spin up to the launch rpm
 		early[k] = 0.0f;
 		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
-		for ( int i = 0; i < 3; ++i )
+		for ( int i = 0; i < 6; ++i )
 		{
 			Step( worldId, 1 );
 			for ( int j = 2; j < 4; ++j )
@@ -451,7 +529,7 @@ static int SlipRelaxationTest( void )
 		if ( k == 1 )
 		{
 			b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 0.3f } );
-			Step( worldId, 360 );
+			Step( worldId, 420 );
 			float speed = b3Vehicle_GetState( vehicleId ).speed;
 			b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, 2 );
 			float plain = ( ws.angularVelocity * def.wheels[2].radius - speed ) / speed;
@@ -464,7 +542,7 @@ static int SlipRelaxationTest( void )
 		b3DestroyWorld( worldId );
 	}
 
-	printf( "    slip 0.05 s into a full throttle launch: %.2f instant, %.2f relaxed\n", early[0], early[1] );
+	printf( "    slip 0.1 s into a full throttle launch: %.2f instant, %.2f relaxed\n", early[0], early[1] );
 	ENSURE( early[0] > 1.0f );
 	ENSURE( early[1] < 0.5f * early[0] );
 	return 0;
@@ -1725,6 +1803,8 @@ int VehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
 	RUN_SUBTEST( AccelerationTest );
+	RUN_SUBTEST( LaunchRevsTest );
+	RUN_SUBTEST( HighGearStartTest );
 	RUN_SUBTEST( TractionControlTest );
 	RUN_SUBTEST( LaunchControlTest );
 	RUN_SUBTEST( SlipRelaxationTest );
