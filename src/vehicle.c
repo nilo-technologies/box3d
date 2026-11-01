@@ -19,6 +19,10 @@
 
 #define B3_VEHICLE_REFERENCE_FRICTION 0.6f
 
+// The steering limit (b3Vehicle_LimitSteer) leaves the steer input alone below this front axle
+// forward speed (m/s), where the tires are far from their slip limit and parking needs full lock
+#define B3_VEHICLE_STEER_LIMIT_MIN_SPEED 3.0f
+
 // Launch control: it arms below this speed (m/s) and aims each driven tire at this fraction of its
 // peak slip. Its torque cap is the tire's peak torque times 1 + gain x (target - slip): at most
 // the wheel scale on the wheel itself, since a light wheel spins up at once on any torque past the
@@ -924,6 +928,81 @@ void b3Vehicle_SetSteering( b3VehicleId vehicleId, b3VehicleSteering steering )
 b3VehicleSteering b3Vehicle_GetSteering( b3VehicleId vehicleId )
 {
 	return b3GetVehicle( vehicleId )->steering;
+}
+
+float b3Vehicle_LimitSteer( b3VehicleId vehicleId, float steer, float braking, float peakScale, float brakingPeakScale )
+{
+	b3World* world = b3GetVehicleWorld( vehicleId );
+	b3Vehicle* v = b3GetVehicleFullId( world, vehicleId );
+	if ( b3IsValidFloat( steer ) == false || steer == 0.0f )
+	{
+		return 0.0f;
+	}
+
+	if ( b3IsBodyIdValidInternal( world, v->chassisId ) == false )
+	{
+		return steer;
+	}
+
+	braking = b3SanitizeFloat( braking, 0.0f, 1.0f, 0.0f );
+	float scale = peakScale + ( brakingPeakScale - peakScale ) * braking;
+
+	// The front axle center and the smallest peak slip angle among the steered wheels
+	b3Vec3 center = b3Vec3_zero;
+	float peakAngle = FLT_MAX;
+	int count = 0;
+	for ( int i = 0; i < v->wheelCount; ++i )
+	{
+		const b3VehicleWheelDef* def = &v->wheels[i].def;
+		if ( def->steerFactor == 0.0f )
+		{
+			continue;
+		}
+
+		center = b3Add( center, def->position );
+		peakAngle = b3MinFloat( peakAngle, def->tire.lateralPeakAngle * scale );
+		count += 1;
+	}
+
+	if ( count == 0 || b3IsValidFloat( peakAngle ) == false )
+	{
+		return steer;
+	}
+	center = b3MulSV( 1.0f / (float)count, center );
+
+	b3WorldTransform xf = b3Body_GetTransform( v->chassisId );
+	b3Vec3 velocity = b3Body_GetWorldPointVelocity( v->chassisId, b3TransformWorldPoint( xf, center ) );
+	b3Vec3 forward = b3RotateVector( xf.q, v->chassis.forward );
+	b3Vec3 left = b3Cross( b3RotateVector( xf.q, v->chassis.up ), forward );
+	float vForward = b3Dot( velocity, forward );
+	if ( vForward < B3_VEHICLE_STEER_LIMIT_MIN_SPEED )
+	{
+		return steer;
+	}
+
+	// The steer angle the vehicle would aim for (positive is left), with its speed falloff
+	const b3VehicleSteering* st = &v->steering;
+	float x = st->speedReference > 0.0f ? vForward / st->speedReference : 0.0f;
+	float maxAngle = st->maxAngle / ( 1.0f + x * x );
+	if ( maxAngle <= 0.0f )
+	{
+		return steer;
+	}
+	float angle = -steer * maxAngle;
+
+	// The direction the front axle travels, measured as the vehicle measures slip angle:
+	// atan2(lateral, |forward| + 1 m/s). The tire's peak angle is defined on that measure.
+	float travel = b3Atan2( b3Dot( velocity, left ), vForward + 1.0f );
+	if ( angle > 0.0f )
+	{
+		angle = b3MinFloat( angle, b3MaxFloat( travel + peakAngle, 0.0f ) );
+	}
+	else
+	{
+		angle = b3MaxFloat( angle, b3MinFloat( travel - peakAngle, 0.0f ) );
+	}
+
+	return -angle / maxAngle;
 }
 
 void b3Vehicle_SetAssists( b3VehicleId vehicleId, b3VehicleAssists assists )
