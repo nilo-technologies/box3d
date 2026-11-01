@@ -1756,11 +1756,13 @@ static int TurboTest( void )
 	ENSURE( partBoost == 0.0f );
 	ENSURE( moreBoost > 0.05f && moreBoost <= 0.4f * 0.5f + 1e-4f );
 
-	// Exhaust energy drives the shaft, so the same turbo spools faster on an engine revving higher
+	// Exhaust energy drives the shaft, so the same turbo spools faster on an engine revving higher.
+	// Both times include the free engine revving up from idle, which takes the higher revving one a
+	// little longer.
 	float lowRev = SpoolTimeAt( &turbo, 4500.0f );
 	float highRev = SpoolTimeAt( &turbo, 9000.0f );
 	printf( "    time to 80%% boost: %.2f s on a 4500 rpm engine, %.2f s on a 9000 rpm one\n", lowRev, highRev );
-	ENSURE( lowRev > 0.0f && highRev > 0.0f && highRev < 0.75f * lowRev );
+	ENSURE( lowRev > 0.0f && highRev > 0.0f && highRev < 0.85f * lowRev );
 
 	// A sequential twin sums its stages
 	b3VehicleTurbo twin = turbo;

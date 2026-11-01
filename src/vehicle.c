@@ -2263,16 +2263,22 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		float floorSpeed = b3LerpFloat( idle, launch, engineThrottle ) + slipRise;
 		if ( engineSpeed < floorSpeed )
 		{
+			// The engine spins up to the floor as fast as its torque at its current rpm turns its
+			// inertia, from where it was last step, rather than jumping there. The idle floor holds
+			// at once.
+			float revTorque = engineThrottle * boostScale * b3EngineTorqueAt( e, rpm ) - parasiticTorque;
+			float rise = h * b3MaxFloat( revTorque, 0.0f ) / e->inertia;
+			floorSpeed = b3MinFloat( floorSpeed, v->engineSpeed + rise );
+			floorSpeed = b3MaxFloat( floorSpeed, idle );
+		}
+
+		if ( engineSpeed < floorSpeed )
+		{
+			// The clutch passes what the engine makes at the floor. It still does while the engine
+			// spins up: the energy to spin the engine up is small next to what a launch puts into
+			// the car, and leaving it out keeps the launch as quick as the jump made it.
 			float available = engineThrottle * boostScale * b3EngineTorqueAt( e, floorSpeed * B3_RADIANS_TO_RPM );
 			available = b3MaxFloat( available - parasiticTorque, 0.0f );
-
-			// The engine spins up to the floor as fast as its torque turns its inertia rather than
-			// jumping there. The idle floor holds at once. The clutch still passes the engine's
-			// torque meanwhile: the energy to spin the engine up is small next to what a launch puts
-			// into the car, and leaving it out keeps the launch as quick as the jump made it.
-			float rise = h * available / e->inertia;
-			floorSpeed = b3MinFloat( floorSpeed, b3MaxFloat( v->engineSpeed, engineSpeed ) + rise );
-			floorSpeed = b3MaxFloat( floorSpeed, idle );
 
 			engineSpeed = floorSpeed;
 			wheelSpeed = ( b + h * k * A * floorSpeed ) / ( 1.0f + h * k * A );
