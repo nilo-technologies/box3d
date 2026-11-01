@@ -32,6 +32,10 @@
 #define B3_LAUNCH_ENGINE_SCALE 2.0f
 #define B3_LAUNCH_DONE_TIME 0.3f
 
+// Pulling away, the clutch slips below a floor that starts at the launch rpm and rises with the
+// road speed until it meets the wheels at this ratio of the launch rpm, where the clutch locks
+#define B3_CLUTCH_LOCK_RATIO 1.3f
+
 // The slip ratio relaxation settles at no less than this speed (m/s)
 #define B3_RELAXATION_MIN_SPEED 1.0f
 
@@ -2237,16 +2241,48 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		float wheelSpeed = det > 0.0f ? ( a11 * b - a21 * rhs ) / det : b;
 		float clutchTorque = k * ( engineSpeed - wheelSpeed );
 
-		// Below the floor the clutch slips. With throttle the floor rises toward a launch rpm.
-		float launch = idle + 0.35f * ( e->maxRpm - e->idleRpm ) * B3_RPM_TO_RADIANS;
-		float floorSpeed = b3LerpFloat( idle, launch, engineThrottle );
+		// Below the floor the clutch slips. With throttle the floor rises toward a launch rpm, all the
+		// way in first and reverse and less in a taller gear, by its ratio against first, so a start
+		// in a high gear bogs just above idle instead of slipping the clutch at launch revs. Pulling
+		// away in first or reverse it also rises with the road speed, so the revs climb as the car
+		// moves and meet the wheels where the clutch locks, B3_CLUTCH_LOCK_RATIO times the launch rpm.
+		float firstRatio = t->gearRatios[0] * t->finalDrive;
+		float gearShare = 1.0f;
+		if ( v->gear > 1 && firstRatio > 0.0f )
+		{
+			gearShare = b3ClampFloat( ratio / firstRatio, 0.0f, 1.0f );
+		}
+		float launch = idle + gearShare * 0.35f * ( e->maxRpm - e->idleRpm ) * B3_RPM_TO_RADIANS;
+		float slipRise = 0.0f;
+		if ( v->gear == 1 || v->gear == -1 )
+		{
+			// The pedal rather than the throttle after traction control, which would hold the revs
+			// flat as it trims the torque. Traction control still caps what the clutch passes.
+			slipRise = throttle * ( 1.0f - 1.0f / B3_CLUTCH_LOCK_RATIO ) * b3MaxFloat( gearSpeed, 0.0f );
+		}
+		float floorSpeed = b3LerpFloat( idle, launch, engineThrottle ) + slipRise;
 		if ( engineSpeed < floorSpeed )
 		{
+			// The engine spins up to the floor as fast as its torque at its current rpm turns its
+			// inertia, from where it was last step, rather than jumping there. The idle floor holds
+			// at once.
+			float revTorque = engineThrottle * boostScale * b3EngineTorqueAt( e, rpm ) - parasiticTorque;
+			float rise = h * b3MaxFloat( revTorque, 0.0f ) / e->inertia;
+			floorSpeed = b3MinFloat( floorSpeed, v->engineSpeed + rise );
+			floorSpeed = b3MaxFloat( floorSpeed, idle );
+		}
+
+		if ( engineSpeed < floorSpeed )
+		{
+			// The clutch passes what the engine makes at the floor. It still does while the engine
+			// spins up: the energy to spin the engine up is small next to what a launch puts into
+			// the car, and leaving it out keeps the launch as quick as the jump made it.
+			float available = engineThrottle * boostScale * b3EngineTorqueAt( e, floorSpeed * B3_RADIANS_TO_RPM );
+			available = b3MaxFloat( available - parasiticTorque, 0.0f );
+
 			engineSpeed = floorSpeed;
 			wheelSpeed = ( b + h * k * A * floorSpeed ) / ( 1.0f + h * k * A );
 			clutchTorque = k * ( floorSpeed - wheelSpeed );
-			float available = engineThrottle * boostScale * b3EngineTorqueAt( e, floorSpeed * B3_RADIANS_TO_RPM );
-			available = b3MaxFloat( available - parasiticTorque, 0.0f );
 			clutchTorque = b3MinFloat( clutchTorque, available );
 		}
 
