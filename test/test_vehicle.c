@@ -1716,6 +1716,52 @@ static int TurboTest( void )
 	return 0;
 }
 
+static int LimitSteerTest( void )
+{
+	b3WorldId worldId = CreateVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	Step( worldId, 60 );
+
+	// Parked, zero and invalid input
+	ENSURE( b3Vehicle_LimitSteer( vehicleId, 1.0f, 0.0f, 1.5f, 1.0f ) == 1.0f );
+	ENSURE( b3Vehicle_LimitSteer( vehicleId, 0.0f, 0.0f, 1.5f, 1.0f ) == 0.0f );
+	ENSURE( b3Vehicle_LimitSteer( vehicleId, NAN, 0.0f, 1.5f, 1.0f ) == 0.0f );
+
+	// Straight at 6 m/s: the cap is the scaled peak slip angle over the speed limited max angle
+	b3VehicleSteering steering = b3Vehicle_GetSteering( vehicleId );
+	float peak = b3Vehicle_GetWheel( vehicleId, 0 ).tire.lateralPeakAngle;
+	float speed = 6.0f;
+	float x = speed / steering.speedReference;
+	float maxAngle = steering.maxAngle / ( 1.0f + x * x );
+	b3Body_SetLinearVelocity( chassisId, (b3Vec3){ 0.0f, 0.0f, speed } );
+	b3Body_SetAngularVelocity( chassisId, b3Vec3_zero );
+	float right = b3Vehicle_LimitSteer( vehicleId, 1.0f, 0.0f, 1.5f, 1.0f );
+	float left = b3Vehicle_LimitSteer( vehicleId, -1.0f, 0.0f, 1.5f, 1.0f );
+	float braking = b3Vehicle_LimitSteer( vehicleId, 1.0f, 1.0f, 1.5f, 1.0f );
+	printf( "    limited steer at 6 m/s: %.3f, braking %.3f\n", right, braking );
+	ENSURE( b3AbsFloat( right - 1.5f * peak / maxAngle ) < 0.02f );
+	ENSURE( b3AbsFloat( left + right ) < 1e-3f );
+	ENSURE( b3AbsFloat( braking - peak / maxAngle ) < 0.02f );
+
+	// Half lock inside the cap is untouched
+	ENSURE( b3Vehicle_LimitSteer( vehicleId, 0.1f, 0.0f, 1.5f, 1.0f ) == 0.1f );
+
+	// Sliding to the left: the front axle travels left, so left lock has more room than right
+	b3Body_SetLinearVelocity( chassisId, (b3Vec3){ 1.0f, 0.0f, speed } );
+	right = b3Vehicle_LimitSteer( vehicleId, 1.0f, 0.0f, 1.5f, 1.0f );
+	left = b3Vehicle_LimitSteer( vehicleId, -1.0f, 0.0f, 1.5f, 1.0f );
+	ENSURE( -left > right && right > 0.0f );
+
+	// Reversing is left alone
+	b3Body_SetLinearVelocity( chassisId, (b3Vec3){ 0.0f, 0.0f, -speed } );
+	ENSURE( b3Vehicle_LimitSteer( vehicleId, 1.0f, 0.0f, 1.5f, 1.0f ) == 1.0f );
+
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
 int VehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
@@ -1741,5 +1787,6 @@ int VehicleTest( void )
 	RUN_SUBTEST( MeshMaterialTest );
 	RUN_SUBTEST( TouchdownBrakeTest );
 	RUN_SUBTEST( TurboTest );
+	RUN_SUBTEST( LimitSteerTest );
 	return 0;
 }

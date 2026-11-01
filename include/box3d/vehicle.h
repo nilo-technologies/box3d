@@ -664,6 +664,17 @@ B3_API b3VehicleSteering b3Vehicle_GetSteering( b3VehicleId vehicleId );
 B3_API void b3Vehicle_SetAssists( b3VehicleId vehicleId, b3VehicleAssists assists );
 B3_API b3VehicleAssists b3Vehicle_GetAssists( b3VehicleId vehicleId );
 
+/// Steering limit, a driver aid for digital steering: returns the steer input (1 full right, -1
+/// full left) with the steer angle capped at peakScale times the steered tires' smallest
+/// lateralPeakAngle, measured from the direction the front axle travels, so full lock at speed
+/// does not turn the front wheels far past their grip. While braking (0 to 1) the cap moves
+/// toward brakingPeakScale. It only takes steering away, never adds or reverses it, and leaves
+/// the input alone below 3 m/s forward at the front axle or on a vehicle with no steered wheel.
+/// It reads the chassis velocity, so call it each step before b3Vehicle_SetInput. Typical
+/// scales are 1.5 and 1: at 1 the fronts hold their best grip but cannot rotate the car.
+B3_API float b3Vehicle_LimitSteer( b3VehicleId vehicleId, float steer, float braking, float peakScale,
+								   float brakingPeakScale );
+
 B3_API void b3Vehicle_SetUserData( b3VehicleId vehicleId, void* userData );
 B3_API void* b3Vehicle_GetUserData( b3VehicleId vehicleId );
 
