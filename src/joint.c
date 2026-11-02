@@ -599,7 +599,7 @@ b3JointId b3CreatePogoJoint( b3WorldId worldId, const b3PogoJointDef* def )
 	return jointId;
 }
 
-b3JointId b3CreateVehicleWheelJointInternal( b3World* world, b3BodyId chassisId, b3BodyId groundId )
+b3JointId b3CreateWheeledVehicleWheelJointInternal( b3World* world, b3BodyId chassisId, b3BodyId groundId )
 {
 	B3_ASSERT( world->locked == false );
 
@@ -610,9 +610,9 @@ b3JointId b3CreateVehicleWheelJointInternal( b3World* world, b3BodyId chassisId,
 	// The chassis must keep colliding with whatever the wheels touch
 	def.collideConnected = true;
 
-	b3JointPair pair = b3CreateJoint( world, &def, b3_vehicleWheelJoint );
+	b3JointPair pair = b3CreateJoint( world, &def, b3_wheeledVehicleWheelJoint );
 	b3JointSim* joint = pair.jointSim;
-	joint->vehicleWheelJoint = (b3VehicleWheelJoint){ 0 };
+	joint->wheeledVehicleWheelJoint = (b3WheeledVehicleWheelJoint){ 0 };
 
 	return (b3JointId){ joint->jointId + 1, world->worldId, pair.joint->generation };
 }
@@ -1311,9 +1311,9 @@ void b3GetJointReaction( b3World* world, b3JointSim* sim, float invTimeStep, flo
 		}
 		break;
 
-		case b3_vehicleWheelJoint:
+		case b3_wheeledVehicleWheelJoint:
 		{
-			b3VehicleWheelJoint* joint = &sim->vehicleWheelJoint;
+			b3WheeledVehicleWheelJoint* joint = &sim->wheeledVehicleWheelJoint;
 			float normalImpulse = joint->springImpulse + joint->bumpImpulse;
 			linearImpulse = sqrtf( normalImpulse * normalImpulse +
 								   joint->longitudinalImpulse * joint->longitudinalImpulse +
@@ -1371,8 +1371,8 @@ static b3Vec3 b3GetJointConstraintForce( b3World* world, b3Joint* joint )
 		case b3_pogoJoint:
 			return b3GetPogoJointForce( world, base );
 
-		case b3_vehicleWheelJoint:
-			return b3GetVehicleWheelJointForce( world, base );
+		case b3_wheeledVehicleWheelJoint:
+			return b3GetWheeledVehicleWheelJointForce( world, base );
 
 		default:
 			B3_ASSERT( false );
@@ -1418,7 +1418,7 @@ static b3Vec3 b3GetJointConstraintTorque( b3World* world, b3Joint* joint )
 
 		case b3_moverJoint:
 		case b3_pogoJoint:
-		case b3_vehicleWheelJoint:
+		case b3_wheeledVehicleWheelJoint:
 			return b3Vec3_zero;
 
 		default:
@@ -1520,7 +1520,7 @@ float b3Joint_GetLinearSeparation( b3JointId jointId )
 		case b3_pogoJoint:
 			return 0.0f;
 
-		case b3_vehicleWheelJoint:
+		case b3_wheeledVehicleWheelJoint:
 			return 0.0f;
 
 		case b3_filterJoint:
@@ -1657,7 +1657,7 @@ float b3Joint_GetAngularSeparation( b3JointId jointId )
 		case b3_pogoJoint:
 			return 0.0f;
 
-		case b3_vehicleWheelJoint:
+		case b3_wheeledVehicleWheelJoint:
 			return 0.0f;
 
 		case b3_filterJoint:
@@ -1824,8 +1824,8 @@ void b3PrepareJoint( b3JointSim* joint, b3StepContext* context )
 			b3PreparePogoJoint( joint, context );
 			break;
 
-		case b3_vehicleWheelJoint:
-			b3PrepareVehicleWheelJoint( joint, context );
+		case b3_wheeledVehicleWheelJoint:
+			b3PrepareWheeledVehicleWheelJoint( joint, context );
 			break;
 
 		default:
@@ -1884,8 +1884,8 @@ void b3WarmStartJoint( b3JointSim* joint, b3StepContext* context )
 			b3WarmStartPogoJoint( joint, context );
 			break;
 
-		case b3_vehicleWheelJoint:
-			b3WarmStartVehicleWheelJoint( joint, context );
+		case b3_wheeledVehicleWheelJoint:
+			b3WarmStartWheeledVehicleWheelJoint( joint, context );
 			break;
 
 		default:
@@ -1946,8 +1946,8 @@ void b3SolveJoint( b3JointSim* joint, b3StepContext* context, bool useBias )
 			b3SolvePogoJoint( joint, context, useBias );
 			break;
 
-		case b3_vehicleWheelJoint:
-			b3SolveVehicleWheelJoint( joint, context, useBias );
+		case b3_wheeledVehicleWheelJoint:
+			b3SolveWheeledVehicleWheelJoint( joint, context, useBias );
 			break;
 
 		default:
@@ -2078,8 +2078,8 @@ void b3DrawJoint( b3DebugDraw* draw, b3World* world, b3Joint* joint )
 			b3DrawPogoJoint( draw, world, jointSim, transformA, transformB, scale );
 			break;
 
-		case b3_vehicleWheelJoint:
-			b3DrawVehicleWheelJoint( draw, world, jointSim, transformA, transformB );
+		case b3_wheeledVehicleWheelJoint:
+			b3DrawWheeledVehicleWheelJoint( draw, world, jointSim, transformA, transformB );
 			break;
 
 		default:
@@ -2109,7 +2109,7 @@ void b3DrawJoint( b3DebugDraw* draw, b3World* world, b3Joint* joint )
 	}
 
 	if ( draw->drawJointExtras && joint->type != b3_moverJoint && joint->type != b3_pogoJoint &&
-		 joint->type != b3_vehicleWheelJoint )
+		 joint->type != b3_wheeledVehicleWheelJoint )
 	{
 		b3Vec3 force = b3GetJointConstraintForce( world, joint );
 		b3Vec3 torque = b3GetJointConstraintTorque( world, joint );

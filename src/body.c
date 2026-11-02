@@ -368,7 +368,7 @@ void b3DestroyBody( b3BodyId bodyId )
 
 	B3_REC( world, DestroyBody, bodyId );
 
-	b3DestroyVehiclesOnBody( world, bodyId );
+	b3DestroyWheeledVehiclesOnBody( world, bodyId );
 
 	world->locked = true;
 

@@ -65,12 +65,12 @@ typedef struct b3JointId
 } b3JointId;
 
 /// Vehicle id references a vehicle instance. This should be treated as an opaque handle.
-typedef struct b3VehicleId
+typedef struct b3WheeledVehicleId
 {
 	int32_t index1;
 	uint16_t world0;
 	uint16_t generation;
-} b3VehicleId;
+} b3WheeledVehicleId;
 
 /// Contact id references a contact instance. This should be treated as an opaque handle.
 typedef struct b3ContactId
@@ -101,7 +101,7 @@ static const b3WorldId b3_nullWorldId = B3_NULL_ID;
 static const b3BodyId b3_nullBodyId = B3_NULL_ID;
 static const b3ShapeId b3_nullShapeId = B3_NULL_ID;
 static const b3JointId b3_nullJointId = B3_NULL_ID;
-static const b3VehicleId b3_nullVehicleId = B3_NULL_ID;
+static const b3WheeledVehicleId b3_nullWheeledVehicleId = B3_NULL_ID;
 static const b3ContactId b3_nullContactId = B3_NULL_ID;
 
 /// Macro to determine if any id is null.

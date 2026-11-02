@@ -10,7 +10,7 @@
 #include "constraint_graph.h"
 #include "id_pool.h"
 #include "name_cache.h"
-#include "vehicle.h"
+#include "wheeled_vehicle.h"
 
 #include "box3d/types.h"
 
@@ -160,11 +160,11 @@ typedef struct b3World
 	// or in the solver sets.
 	b3Array( b3Joint ) joints;
 
-	// Vehicles are stored densely by id. The anchor is a static body that wheel joints attach to
+	// WheeledVehicles are stored densely by id. The anchor is a static body that wheel joints attach to
 	// while touching static ground or nothing.
-	b3IdPool vehicleIdPool;
-	b3Array( b3Vehicle ) vehicles;
-	b3BodyId vehicleAnchorId;
+	b3IdPool wheeledVehicleIdPool;
+	b3Array( b3WheeledVehicle ) vehicles;
+	b3BodyId wheeledVehicleAnchorId;
 
 	// Used to create stable ids for contacts
 	b3IdPool contactIdPool;

@@ -27,9 +27,9 @@ static b3Softness b3MakeSoftOmega( float omega, float zeta, float h )
 	};
 }
 
-b3Vec3 b3GetVehicleWheelJointForce( b3World* world, b3JointSim* base )
+b3Vec3 b3GetWheeledVehicleWheelJointForce( b3World* world, b3JointSim* base )
 {
-	b3VehicleWheelJoint* joint = &base->vehicleWheelJoint;
+	b3WheeledVehicleWheelJoint* joint = &base->wheeledVehicleWheelJoint;
 	b3Vec3 impulse = b3MulSV( joint->springImpulse + joint->bumpImpulse, joint->normal );
 	impulse = b3MulAdd( impulse, joint->longitudinalImpulse, joint->forward );
 	impulse = b3MulAdd( impulse, joint->lateralImpulse, joint->lateral );
@@ -45,9 +45,9 @@ static float b3EffectiveMass( float mA, float mB, b3Matrix3 iA, b3Matrix3 iB, b3
 	return k > 0.0f ? 1.0f / k : 0.0f;
 }
 
-void b3PrepareVehicleWheelJoint( b3JointSim* base, b3StepContext* context )
+void b3PrepareWheeledVehicleWheelJoint( b3JointSim* base, b3StepContext* context )
 {
-	B3_ASSERT( base->type == b3_vehicleWheelJoint );
+	B3_ASSERT( base->type == b3_wheeledVehicleWheelJoint );
 
 	b3World* world = context->world;
 
@@ -72,7 +72,7 @@ void b3PrepareVehicleWheelJoint( b3JointSim* base, b3StepContext* context )
 	base->invIA = iA;
 	base->invIB = iB;
 
-	b3VehicleWheelJoint* joint = &base->vehicleWheelJoint;
+	b3WheeledVehicleWheelJoint* joint = &base->wheeledVehicleWheelJoint;
 	joint->indexA = bodyA->setIndex == b3_awakeSet ? bodyA->localIndex : B3_NULL_INDEX;
 	joint->indexB = bodyB->setIndex == b3_awakeSet ? bodyB->localIndex : B3_NULL_INDEX;
 
@@ -103,7 +103,7 @@ void b3PrepareVehicleWheelJoint( b3JointSim* base, b3StepContext* context )
 	}
 }
 
-static void b3ApplyWheelImpulse( b3VehicleWheelJoint* joint, float mA, float mB, b3Matrix3 iA, b3Matrix3 iB,
+static void b3ApplyWheelImpulse( b3WheeledVehicleWheelJoint* joint, float mA, float mB, b3Matrix3 iA, b3Matrix3 iB,
 								 b3Vec3 rA, b3Vec3 rB, b3Vec3 impulse, b3Vec3* vA, b3Vec3* wA, b3Vec3* vB,
 								 b3Vec3* wB )
 {
@@ -114,11 +114,11 @@ static void b3ApplyWheelImpulse( b3VehicleWheelJoint* joint, float mA, float mB,
 	*wB = b3Sub( *wB, b3MulMV( iB, b3Cross( rB, impulse ) ) );
 }
 
-void b3WarmStartVehicleWheelJoint( b3JointSim* base, b3StepContext* context )
+void b3WarmStartWheeledVehicleWheelJoint( b3JointSim* base, b3StepContext* context )
 {
-	B3_ASSERT( base->type == b3_vehicleWheelJoint );
+	B3_ASSERT( base->type == b3_wheeledVehicleWheelJoint );
 
-	b3VehicleWheelJoint* joint = &base->vehicleWheelJoint;
+	b3WheeledVehicleWheelJoint* joint = &base->wheeledVehicleWheelJoint;
 
 	// The drivetrain torque was solved implicitly in the pre-step, so applying it here per
 	// substep is just distributing a known impulse.
@@ -166,11 +166,11 @@ void b3WarmStartVehicleWheelJoint( b3JointSim* base, b3StepContext* context )
 	}
 }
 
-void b3SolveVehicleWheelJoint( b3JointSim* base, b3StepContext* context, bool useBias )
+void b3SolveWheeledVehicleWheelJoint( b3JointSim* base, b3StepContext* context, bool useBias )
 {
-	B3_ASSERT( base->type == b3_vehicleWheelJoint );
+	B3_ASSERT( base->type == b3_wheeledVehicleWheelJoint );
 
-	b3VehicleWheelJoint* joint = &base->vehicleWheelJoint;
+	b3WheeledVehicleWheelJoint* joint = &base->wheeledVehicleWheelJoint;
 	float h = context->h;
 
 	// Brake row on the wheel spin. With contact it is solved together with the roller row below.
@@ -377,13 +377,13 @@ void b3SolveVehicleWheelJoint( b3JointSim* base, b3StepContext* context, bool us
 	}
 }
 
-void b3DrawVehicleWheelJoint( b3DebugDraw* draw, b3World* world, b3JointSim* base, b3WorldTransform transformA,
+void b3DrawWheeledVehicleWheelJoint( b3DebugDraw* draw, b3World* world, b3JointSim* base, b3WorldTransform transformA,
 							  b3WorldTransform transformB )
 {
-	B3_ASSERT( base->type == b3_vehicleWheelJoint );
+	B3_ASSERT( base->type == b3_wheeledVehicleWheelJoint );
 	B3_UNUSED( transformA );
 
-	b3VehicleWheelJoint* joint = &base->vehicleWheelJoint;
+	b3WheeledVehicleWheelJoint* joint = &base->wheeledVehicleWheelJoint;
 	if ( joint->hasContact == false )
 	{
 		return;

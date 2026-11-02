@@ -21,7 +21,7 @@
  * Conventions: wheel positions, forward and up are in the chassis body's local frame.
  * Steering input is positive to the right. Wheel spin is positive when rolling forward.
  *
- * Vehicles are not supported in recorded worlds or snapshots.
+ * WheeledVehicles are not supported in recorded worlds or snapshots.
  * @{
  */
 
@@ -38,21 +38,21 @@
 #define B3_MAX_VEHICLE_ANTI_ROLL_BARS 4
 
 /// How a wheel probes the ground
-typedef enum b3VehicleCastType
+typedef enum b3WheeledVehicleCastType
 {
 	/// Rounded cylinder matching the wheel radius and width. Does not fall into cracks.
-	b3_vehicleCastCylinder,
+	b3_wheeledVehicleCastCylinder,
 
 	/// Sphere with the wheel radius
-	b3_vehicleCastSphere,
+	b3_wheeledVehicleCastSphere,
 
 	/// Single ray through the wheel center. Cheapest.
-	b3_vehicleCastRay,
-} b3VehicleCastType;
+	b3_wheeledVehicleCastRay,
+} b3WheeledVehicleCastType;
 
 /// Suspension settings for one wheel. Lengths are measured from the attachment point to the
 /// wheel center along the chassis down axis.
-typedef struct b3VehicleSuspension
+typedef struct b3WheeledVehicleSuspension
 {
 	/// Length at full compression, where the bump stop engages (m)
 	float minLength;
@@ -74,12 +74,12 @@ typedef struct b3VehicleSuspension
 
 	/// Hard stop at minLength so hard landings do not sink the wheel through the chassis
 	bool enableBumpStop;
-} b3VehicleSuspension;
+} b3WheeledVehicleSuspension;
 
 /// Tire friction. Each axis is a 3 point curve: zero at no slip, rising to the peak, then
 /// falling to the slide value. The coefficients are multiplied by the ground friction relative
 /// to the default shape friction (0.6).
-typedef struct b3VehicleTire
+typedef struct b3WheeledVehicleTire
 {
 	/// Slip ratio of peak longitudinal grip
 	float longitudinalPeakSlip;
@@ -112,10 +112,10 @@ typedef struct b3VehicleTire
 	/// between the wheel and ground speed then takes a moment to become a large slip, so pulling
 	/// away does not break the tire loose at once. At speed it settles within a step. 0 is off.
 	float longitudinalRelaxationLength;
-} b3VehicleTire;
+} b3WheeledVehicleTire;
 
 /// Wheel definition
-typedef struct b3VehicleWheelDef
+typedef struct b3WheeledVehicleWheelDef
 {
 	/// Suspension attachment point in chassis local space
 	b3Vec3 position;
@@ -143,14 +143,14 @@ typedef struct b3VehicleWheelDef
 	float angularDamping;
 
 	/// Ground probe shape
-	b3VehicleCastType castType;
+	b3WheeledVehicleCastType castType;
 
-	b3VehicleSuspension suspension;
-	b3VehicleTire tire;
-} b3VehicleWheelDef;
+	b3WheeledVehicleSuspension suspension;
+	b3WheeledVehicleTire tire;
+} b3WheeledVehicleWheelDef;
 
 /// Chassis settings
-typedef struct b3VehicleChassis
+typedef struct b3WheeledVehicleChassis
 {
 	/// Chassis mass (kg). Zero or less keeps the mass computed from the body's shapes.
 	float mass;
@@ -173,11 +173,11 @@ typedef struct b3VehicleChassis
 
 	/// Filter for the wheel casts. The chassis's own shapes are always ignored.
 	b3QueryFilter castFilter;
-} b3VehicleChassis;
+} b3WheeledVehicleChassis;
 
 /// Engine settings. The torque curve is linear from idle to the peak and from the peak to the
 /// max rpm.
-typedef struct b3VehicleEngine
+typedef struct b3WheeledVehicleEngine
 {
 	/// Peak torque (N*m)
 	float maxTorque;
@@ -202,7 +202,7 @@ typedef struct b3VehicleEngine
 
 	/// Internal friction, gives engine braking (N*m*s/rad)
 	float angularDamping;
-} b3VehicleEngine;
+} b3WheeledVehicleEngine;
 
 /// Maximum number of turbo stages
 #define B3_MAX_VEHICLE_TURBO_STAGES 2
@@ -210,7 +210,7 @@ typedef struct b3VehicleEngine
 /// One compressor stage. Its shaft spools toward a target set by the pedal and the engine rpm and
 /// spins down with the bleed time. The boost it delivers is what the shaft makes, capped by what
 /// the pedal asks for. A stage with zero gain is off.
-typedef struct b3VehicleTurboStage
+typedef struct b3WheeledVehicleTurboStage
 {
 	/// Torque added at full boost, as a fraction of the torque curve. 0.5 gives 1.5 times the torque.
 	float gain;
@@ -230,10 +230,10 @@ typedef struct b3VehicleTurboStage
 	/// blow-off valve within about 0.1 s, but a shaft still spinning brings it back as soon as the
 	/// throttle opens, so a longer bleed time keeps more boost through shifts and short lifts.
 	float bleedTime;
-} b3VehicleTurboStage;
+} b3WheeledVehicleTurboStage;
 
 /// Forced induction. The torque curve is multiplied by 1 plus the summed boost of the stages. All
-/// zero, as in b3DefaultVehicleDef, is a naturally aspirated engine.
+/// zero, as in b3DefaultWheeledVehicleDef, is a naturally aspirated engine.
 ///
 /// The pedal asks for a share of the fully boosted torque, (1 + the summed gains) times the curve.
 /// The engine makes the first 1 / (1 + gains) of the pedal with the throttle plate alone, so boost
@@ -242,9 +242,9 @@ typedef struct b3VehicleTurboStage
 /// A single turbo uses one stage. A sequential twin turbo uses a small fast stage at low rpm and a
 /// large slow stage higher up. A supercharger has no lag: an instant fraction of 1 and a parasitic
 /// torque for the belt drive.
-typedef struct b3VehicleTurbo
+typedef struct b3WheeledVehicleTurbo
 {
-	b3VehicleTurboStage stages[B3_MAX_VEHICLE_TURBO_STAGES];
+	b3WheeledVehicleTurboStage stages[B3_MAX_VEHICLE_TURBO_STAGES];
 
 	/// Fraction of the shaft spool that follows its target with no lag. 0 for an exhaust driven
 	/// turbo, between 0 and 1 for an electrically assisted turbo, 1 for a supercharger.
@@ -256,22 +256,22 @@ typedef struct b3VehicleTurbo
 	/// Anti-lag: the shaft and the manifold pressure ignore the pedal, so boost holds off throttle
 	/// and through shifts. They still follow the rpm.
 	bool antiLag;
-} b3VehicleTurbo;
+} b3WheeledVehicleTurbo;
 
-typedef enum b3VehicleTransmissionMode
+typedef enum b3WheeledVehicleTransmissionMode
 {
 	/// Shifts by rpm. Pressing reverse while stopped selects reverse. See also
-	/// b3VehicleAssists::brakeReverse.
-	b3_vehicleTransmissionAuto,
+	/// b3WheeledVehicleAssists::brakeReverse.
+	b3_wheeledVehicleTransmissionAuto,
 
-	/// Use b3Vehicle_SetGear
-	b3_vehicleTransmissionManual,
-} b3VehicleTransmissionMode;
+	/// Use b3WheeledVehicle_SetGear
+	b3_wheeledVehicleTransmissionManual,
+} b3WheeledVehicleTransmissionMode;
 
 /// Gearbox and clutch
-typedef struct b3VehicleTransmission
+typedef struct b3WheeledVehicleTransmission
 {
-	b3VehicleTransmissionMode mode;
+	b3WheeledVehicleTransmissionMode mode;
 
 	/// Forward gear ratios, first gear first
 	float gearRatios[B3_MAX_VEHICLE_GEARS];
@@ -302,10 +302,10 @@ typedef struct b3VehicleTransmission
 
 	/// Clutch coupling strength (N*m*s/rad)
 	float clutchStrength;
-} b3VehicleTransmission;
+} b3WheeledVehicleTransmission;
 
 /// A differential splits engine torque between two wheels
-typedef struct b3VehicleDifferential
+typedef struct b3WheeledVehicleDifferential
 {
 	/// Wheel index or -1
 	int leftWheel;
@@ -322,36 +322,36 @@ typedef struct b3VehicleDifferential
 	/// Max wheel speed ratio before torque moves to the slower wheel. 1 or less is an open
 	/// differential.
 	float limitedSlipRatio;
-} b3VehicleDifferential;
+} b3WheeledVehicleDifferential;
 
 /// Drivetrain layout
-typedef struct b3VehicleDrivetrain
+typedef struct b3WheeledVehicleDrivetrain
 {
-	b3VehicleDifferential differentials[B3_MAX_VEHICLE_DIFFERENTIALS];
+	b3WheeledVehicleDifferential differentials[B3_MAX_VEHICLE_DIFFERENTIALS];
 	int differentialCount;
 
 	/// Limited slip between differentials. 1 or less is open.
 	float centerLimitedSlipRatio;
-} b3VehicleDrivetrain;
+} b3WheeledVehicleDrivetrain;
 
 /// Anti-roll bar connecting two wheels. Pushes on the compression difference.
-typedef struct b3VehicleAntiRollBar
+typedef struct b3WheeledVehicleAntiRollBar
 {
 	int leftWheel;
 	int rightWheel;
 
 	/// Stiffness (N/m)
 	float stiffness;
-} b3VehicleAntiRollBar;
+} b3WheeledVehicleAntiRollBar;
 
-typedef struct b3VehicleAntiRoll
+typedef struct b3WheeledVehicleAntiRoll
 {
-	b3VehicleAntiRollBar bars[B3_MAX_VEHICLE_ANTI_ROLL_BARS];
+	b3WheeledVehicleAntiRollBar bars[B3_MAX_VEHICLE_ANTI_ROLL_BARS];
 	int barCount;
-} b3VehicleAntiRoll;
+} b3WheeledVehicleAntiRoll;
 
 /// Steering
-typedef struct b3VehicleSteering
+typedef struct b3WheeledVehicleSteering
 {
 	/// Steer angle at rest (radians)
 	float maxAngle;
@@ -367,10 +367,10 @@ typedef struct b3VehicleSteering
 
 	/// 0 parallel steering, 1 full Ackermann geometry
 	float ackermann;
-} b3VehicleSteering;
+} b3WheeledVehicleSteering;
 
 /// Driving assists and arcade shortcuts
-typedef struct b3VehicleAssists
+typedef struct b3WheeledVehicleAssists
 {
 	/// Steers into a rear slide, as a fraction of the slide angle
 	float counterSteer;
@@ -427,40 +427,40 @@ typedef struct b3VehicleAssists
 	/// neither spins them up nor leaves grip unused. Works with traction control on or off, and
 	/// ends when the throttle is released or the tires grip at full throttle with room to spare.
 	bool launchControl;
-} b3VehicleAssists;
+} b3WheeledVehicleAssists;
 
-/// Vehicle definition. Use b3DefaultVehicleDef to initialize. The default is a 1300 kg rear
+/// Vehicle definition. Use b3DefaultWheeledVehicleDef to initialize. The default is a 1300 kg rear
 /// wheel drive sedan with 4 wheels in the order front left, front right, rear left, rear right.
-typedef struct b3VehicleDef
+typedef struct b3WheeledVehicleDef
 {
 	/// Existing dynamic body used as the chassis. Create its shapes before the vehicle.
 	b3BodyId chassisId;
 
-	b3VehicleChassis chassis;
-	b3VehicleWheelDef wheels[B3_MAX_VEHICLE_WHEELS];
+	b3WheeledVehicleChassis chassis;
+	b3WheeledVehicleWheelDef wheels[B3_MAX_VEHICLE_WHEELS];
 	int wheelCount;
-	b3VehicleEngine engine;
-	b3VehicleTurbo turbo;
-	b3VehicleTransmission transmission;
-	b3VehicleDrivetrain drivetrain;
-	b3VehicleAntiRoll antiRoll;
-	b3VehicleSteering steering;
-	b3VehicleAssists assists;
+	b3WheeledVehicleEngine engine;
+	b3WheeledVehicleTurbo turbo;
+	b3WheeledVehicleTransmission transmission;
+	b3WheeledVehicleDrivetrain drivetrain;
+	b3WheeledVehicleAntiRoll antiRoll;
+	b3WheeledVehicleSteering steering;
+	b3WheeledVehicleAssists assists;
 
 	void* userData;
 
 	/// Used internally to detect a valid definition. DO NOT SET.
 	int internalValue;
-} b3VehicleDef;
+} b3WheeledVehicleDef;
 
 /// Driver input
-typedef struct b3VehicleInput
+typedef struct b3WheeledVehicleInput
 {
 	/// -1 full reverse, 1 full forward. With the automatic gearbox, the opposite direction brakes
 	/// first and selects reverse once stopped.
 	float forward;
 
-	/// 0 to 1. With the automatic gearbox and b3VehicleAssists::brakeReverse, it also selects
+	/// 0 to 1. With the automatic gearbox and b3WheeledVehicleAssists::brakeReverse, it also selects
 	/// reverse once stopped when there is no forward input.
 	float brake;
 
@@ -469,10 +469,10 @@ typedef struct b3VehicleInput
 
 	/// 0 to 1
 	float handbrake;
-} b3VehicleInput;
+} b3WheeledVehicleInput;
 
 /// Vehicle readout, updated each step
-typedef struct b3VehicleState
+typedef struct b3WheeledVehicleState
 {
 	/// Forward speed (m/s)
 	float speed;
@@ -496,15 +496,15 @@ typedef struct b3VehicleState
 
 	int wheelsInContact;
 
-	/// Upside down or on its side and nearly stopped for 2 seconds. See b3Vehicle_Reset.
+	/// Upside down or on its side and nearly stopped for 2 seconds. See b3WheeledVehicle_Reset.
 	bool stuck;
 
 	/// Launch control is managing the drive torque
 	bool isLaunching;
-} b3VehicleState;
+} b3WheeledVehicleState;
 
 /// Wheel readout, updated each step
-typedef struct b3VehicleWheelState
+typedef struct b3WheeledVehicleWheelState
 {
 	bool hasContact;
 
@@ -547,24 +547,24 @@ typedef struct b3VehicleWheelState
 
 	/// The sticky tire is holding this wheel
 	bool isSticky;
-} b3VehicleWheelState;
+} b3WheeledVehicleWheelState;
 
-/// Bits in b3VehicleWheelData::flags
-typedef enum b3VehicleWheelFlags
+/// Bits in b3WheeledVehicleWheelData::flags
+typedef enum b3WheeledVehicleWheelFlags
 {
-	b3_vehicleWheelContact = 0x1,
-	b3_vehicleWheelSticky = 0x2,
-} b3VehicleWheelFlags;
+	b3_wheeledVehicleWheelContact = 0x1,
+	b3_wheeledVehicleWheelSticky = 0x2,
+} b3WheeledVehicleWheelFlags;
 
-/// Wheel state and transform packed for bulk reads, see b3Vehicle_GetWheelData. Every field is
+/// Wheel state and transform packed for bulk reads, see b3WheeledVehicle_GetWheelData. Every field is
 /// made of 4 byte words, and the only 8 byte fields, groundShapeId and userMaterialId, come last,
 /// so the record has no padding and a fixed 120 byte (30 word) layout. Words are little endian, as on wasm, x86 and ARM. From JavaScript,
 /// view the output with a Float32Array for the floats and a Uint32Array over the same memory for
 /// the flags and ids. The comments give the word offset of each field. Without contact the
 /// contact point, normal, ground shape and material are zero.
-typedef struct b3VehicleWheelData
+typedef struct b3WheeledVehicleWheelData
 {
-	/// [0] Wheel center in world space, as b3Vehicle_GetWheelTransform. Rounded to float in
+	/// [0] Wheel center in world space, as b3WheeledVehicle_GetWheelTransform. Rounded to float in
 	/// double precision builds.
 	b3Vec3 position;
 
@@ -613,7 +613,7 @@ typedef struct b3VehicleWheelData
 	/// [24]
 	float brakeTorque;
 
-	/// [25] b3VehicleWheelFlags
+	/// [25] b3WheeledVehicleWheelFlags
 	uint32_t flags;
 
 	/// [26] index1 as int32, then [27] world0 in the low 16 bits and generation in the high 16 bits
@@ -621,67 +621,67 @@ typedef struct b3VehicleWheelData
 
 	/// [28] low 32 bits, [29] high 32 bits
 	uint64_t userMaterialId;
-} b3VehicleWheelData;
+} b3WheeledVehicleWheelData;
 
-B3_API b3VehicleDef b3DefaultVehicleDef( void );
-B3_API b3VehicleWheelDef b3DefaultVehicleWheelDef( void );
+B3_API b3WheeledVehicleDef b3DefaultWheeledVehicleDef( void );
+B3_API b3WheeledVehicleWheelDef b3DefaultWheeledVehicleWheelDef( void );
 
 /// Create a vehicle on an existing dynamic chassis body. Destroying the chassis destroys the
 /// vehicle.
-B3_API b3VehicleId b3CreateVehicle( b3WorldId worldId, const b3VehicleDef* def );
-B3_API void b3DestroyVehicle( b3VehicleId vehicleId );
-B3_API bool b3Vehicle_IsValid( b3VehicleId vehicleId );
-B3_API b3BodyId b3Vehicle_GetChassisBody( b3VehicleId vehicleId );
-B3_API int b3Vehicle_GetWheelCount( b3VehicleId vehicleId );
+B3_API b3WheeledVehicleId b3CreateWheeledVehicle( b3WorldId worldId, const b3WheeledVehicleDef* def );
+B3_API void b3DestroyWheeledVehicle( b3WheeledVehicleId wheeledVehicleId );
+B3_API bool b3WheeledVehicle_IsValid( b3WheeledVehicleId wheeledVehicleId );
+B3_API b3BodyId b3WheeledVehicle_GetChassisBody( b3WheeledVehicleId wheeledVehicleId );
+B3_API int b3WheeledVehicle_GetWheelCount( b3WheeledVehicleId wheeledVehicleId );
 
-B3_API void b3Vehicle_SetInput( b3VehicleId vehicleId, b3VehicleInput input );
-B3_API b3VehicleInput b3Vehicle_GetInput( b3VehicleId vehicleId );
+B3_API void b3WheeledVehicle_SetInput( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleInput input );
+B3_API b3WheeledVehicleInput b3WheeledVehicle_GetInput( b3WheeledVehicleId wheeledVehicleId );
 
 /// Select a gear: -1 reverse, 0 neutral, 1 and up forward. Used by the manual gearbox, the
 /// automatic gearbox may change it again.
-B3_API void b3Vehicle_SetGear( b3VehicleId vehicleId, int gear );
+B3_API void b3WheeledVehicle_SetGear( b3WheeledVehicleId wheeledVehicleId, int gear );
 
 /// Teleport the chassis, clear its velocity and reset the drivetrain
-B3_API void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation );
+B3_API void b3WheeledVehicle_Reset( b3WheeledVehicleId wheeledVehicleId, b3Pos position, b3Quat rotation );
 
 /// Live settings. Changes take effect on the next step.
-B3_API void b3Vehicle_SetChassis( b3VehicleId vehicleId, b3VehicleChassis chassis );
-B3_API b3VehicleChassis b3Vehicle_GetChassis( b3VehicleId vehicleId );
-B3_API void b3Vehicle_SetWheel( b3VehicleId vehicleId, int wheelIndex, b3VehicleWheelDef wheel );
-B3_API b3VehicleWheelDef b3Vehicle_GetWheel( b3VehicleId vehicleId, int wheelIndex );
-B3_API void b3Vehicle_SetEngine( b3VehicleId vehicleId, b3VehicleEngine engine );
-B3_API b3VehicleEngine b3Vehicle_GetEngine( b3VehicleId vehicleId );
-B3_API void b3Vehicle_SetTurbo( b3VehicleId vehicleId, b3VehicleTurbo turbo );
-B3_API b3VehicleTurbo b3Vehicle_GetTurbo( b3VehicleId vehicleId );
-B3_API void b3Vehicle_SetTransmission( b3VehicleId vehicleId, b3VehicleTransmission transmission );
-B3_API b3VehicleTransmission b3Vehicle_GetTransmission( b3VehicleId vehicleId );
-B3_API void b3Vehicle_SetDrivetrain( b3VehicleId vehicleId, b3VehicleDrivetrain drivetrain );
-B3_API b3VehicleDrivetrain b3Vehicle_GetDrivetrain( b3VehicleId vehicleId );
-B3_API void b3Vehicle_SetAntiRoll( b3VehicleId vehicleId, b3VehicleAntiRoll antiRoll );
-B3_API b3VehicleAntiRoll b3Vehicle_GetAntiRoll( b3VehicleId vehicleId );
-B3_API void b3Vehicle_SetSteering( b3VehicleId vehicleId, b3VehicleSteering steering );
-B3_API b3VehicleSteering b3Vehicle_GetSteering( b3VehicleId vehicleId );
-B3_API void b3Vehicle_SetAssists( b3VehicleId vehicleId, b3VehicleAssists assists );
-B3_API b3VehicleAssists b3Vehicle_GetAssists( b3VehicleId vehicleId );
+B3_API void b3WheeledVehicle_SetChassis( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleChassis chassis );
+B3_API b3WheeledVehicleChassis b3WheeledVehicle_GetChassis( b3WheeledVehicleId wheeledVehicleId );
+B3_API void b3WheeledVehicle_SetWheel( b3WheeledVehicleId wheeledVehicleId, int wheelIndex, b3WheeledVehicleWheelDef wheel );
+B3_API b3WheeledVehicleWheelDef b3WheeledVehicle_GetWheel( b3WheeledVehicleId wheeledVehicleId, int wheelIndex );
+B3_API void b3WheeledVehicle_SetEngine( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleEngine engine );
+B3_API b3WheeledVehicleEngine b3WheeledVehicle_GetEngine( b3WheeledVehicleId wheeledVehicleId );
+B3_API void b3WheeledVehicle_SetTurbo( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleTurbo turbo );
+B3_API b3WheeledVehicleTurbo b3WheeledVehicle_GetTurbo( b3WheeledVehicleId wheeledVehicleId );
+B3_API void b3WheeledVehicle_SetTransmission( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleTransmission transmission );
+B3_API b3WheeledVehicleTransmission b3WheeledVehicle_GetTransmission( b3WheeledVehicleId wheeledVehicleId );
+B3_API void b3WheeledVehicle_SetDrivetrain( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleDrivetrain drivetrain );
+B3_API b3WheeledVehicleDrivetrain b3WheeledVehicle_GetDrivetrain( b3WheeledVehicleId wheeledVehicleId );
+B3_API void b3WheeledVehicle_SetAntiRoll( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleAntiRoll antiRoll );
+B3_API b3WheeledVehicleAntiRoll b3WheeledVehicle_GetAntiRoll( b3WheeledVehicleId wheeledVehicleId );
+B3_API void b3WheeledVehicle_SetSteering( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleSteering steering );
+B3_API b3WheeledVehicleSteering b3WheeledVehicle_GetSteering( b3WheeledVehicleId wheeledVehicleId );
+B3_API void b3WheeledVehicle_SetAssists( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleAssists assists );
+B3_API b3WheeledVehicleAssists b3WheeledVehicle_GetAssists( b3WheeledVehicleId wheeledVehicleId );
 
-B3_API void b3Vehicle_SetUserData( b3VehicleId vehicleId, void* userData );
-B3_API void* b3Vehicle_GetUserData( b3VehicleId vehicleId );
+B3_API void b3WheeledVehicle_SetUserData( b3WheeledVehicleId wheeledVehicleId, void* userData );
+B3_API void* b3WheeledVehicle_GetUserData( b3WheeledVehicleId wheeledVehicleId );
 
-B3_API b3VehicleState b3Vehicle_GetState( b3VehicleId vehicleId );
-B3_API b3VehicleWheelState b3Vehicle_GetWheelState( b3VehicleId vehicleId, int wheelIndex );
+B3_API b3WheeledVehicleState b3WheeledVehicle_GetState( b3WheeledVehicleId wheeledVehicleId );
+B3_API b3WheeledVehicleWheelState b3WheeledVehicle_GetWheelState( b3WheeledVehicleId wheeledVehicleId, int wheelIndex );
 
 /// Wheel center and orientation in world space, including steering and spin. The wheel's
 /// axle is the chassis local axis up x forward.
-B3_API b3WorldTransform b3Vehicle_GetWheelTransform( b3VehicleId vehicleId, int wheelIndex );
+B3_API b3WorldTransform b3WheeledVehicle_GetWheelTransform( b3WheeledVehicleId wheeledVehicleId, int wheelIndex );
 
 /// Writes the state and world transform of every wheel into data, in wheel order, in one call.
 /// Writes at most capacity records and returns the number written, 0 for a negative capacity.
-B3_API int b3Vehicle_GetWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int capacity );
+B3_API int b3WheeledVehicle_GetWheelData( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleWheelData* data, int capacity );
 
 /// Sprung mass carried by a wheel's suspension (kg)
-B3_API float b3Vehicle_GetSprungMass( b3VehicleId vehicleId, int wheelIndex );
+B3_API float b3WheeledVehicle_GetSprungMass( b3WheeledVehicleId wheeledVehicleId, int wheelIndex );
 
 /// Number of vehicles in the world
-B3_API int b3World_GetVehicleCount( b3WorldId worldId );
+B3_API int b3World_GetWheeledVehicleCount( b3WorldId worldId );
 
 /**@}*/ // vehicle

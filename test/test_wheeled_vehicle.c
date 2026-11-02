@@ -15,7 +15,7 @@
 #define VEHICLE_SUBSTEPS 4
 #define KMH ( 1.0f / 3.6f )
 
-static b3WorldId CreateVehicleWorld( int workerCount )
+static b3WorldId CreateWheeledVehicleWorld( int workerCount )
 {
 	b3WorldDef worldDef = b3DefaultWorldDef();
 	worldDef.gravity = (b3Vec3){ 0.0f, -9.81f, 0.0f };
@@ -55,12 +55,12 @@ static b3BodyId CreateChassis( b3WorldId worldId, b3Pos position, b3Quat rotatio
 	return bodyId;
 }
 
-static b3VehicleId CreateCar( b3WorldId worldId, b3Pos position, const b3VehicleDef* base )
+static b3WheeledVehicleId CreateCar( b3WorldId worldId, b3Pos position, const b3WheeledVehicleDef* base )
 {
 	b3BodyId chassisId = CreateChassis( worldId, position, b3Quat_identity );
-	b3VehicleDef def = base != NULL ? *base : b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = base != NULL ? *base : b3DefaultWheeledVehicleDef();
 	def.chassisId = chassisId;
-	return b3CreateVehicle( worldId, &def );
+	return b3CreateWheeledVehicle( worldId, &def );
 }
 
 static void Step( b3WorldId worldId, int count )
@@ -76,9 +76,9 @@ static bool IsFiniteTransform( b3WorldTransform xf )
 	return b3IsValidPosition( xf.p ) && b3IsValidQuat( xf.q );
 }
 
-static bool VehicleIsFinite( b3VehicleId vehicleId )
+static bool WheeledVehicleIsFinite( b3WheeledVehicleId wheeledVehicleId )
 {
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	if ( IsFiniteTransform( b3Body_GetTransform( chassisId ) ) == false )
 	{
 		return false;
@@ -90,23 +90,23 @@ static bool VehicleIsFinite( b3VehicleId vehicleId )
 		return false;
 	}
 
-	b3VehicleState state = b3Vehicle_GetState( vehicleId );
+	b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 	if ( b3IsValidFloat( state.engineRpm ) == false || b3IsValidFloat( state.speed ) == false )
 	{
 		return false;
 	}
 
-	int count = b3Vehicle_GetWheelCount( vehicleId );
+	int count = b3WheeledVehicle_GetWheelCount( wheeledVehicleId );
 	for ( int i = 0; i < count; ++i )
 	{
-		b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, i );
+		b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, i );
 		if ( b3IsValidFloat( ws.angularVelocity ) == false || b3IsValidFloat( ws.load ) == false ||
 			 b3IsValidFloat( ws.slipRatio ) == false || b3IsValidFloat( ws.suspensionLength ) == false )
 		{
 			return false;
 		}
 
-		if ( IsFiniteTransform( b3Vehicle_GetWheelTransform( vehicleId, i ) ) == false )
+		if ( IsFiniteTransform( b3WheeledVehicle_GetWheelTransform( wheeledVehicleId, i ) ) == false )
 		{
 			return false;
 		}
@@ -127,17 +127,17 @@ static float GetRollAngle( b3BodyId chassisId )
 // Drops the car and checks the resting suspension and the time it takes to settle
 static int RideHeightTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 1.0f, 0.0f }, NULL );
-	ENSURE( b3Vehicle_IsValid( vehicleId ) );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 1.0f, 0.0f }, NULL );
+	ENSURE( b3WheeledVehicle_IsValid( wheeledVehicleId ) );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 
 	// Sprung masses sum to the chassis mass
 	float total = 0.0f;
 	for ( int i = 0; i < 4; ++i )
 	{
-		total += b3Vehicle_GetSprungMass( vehicleId, i );
+		total += b3WheeledVehicle_GetSprungMass( wheeledVehicleId, i );
 	}
 	ENSURE_SMALL( total - 1300.0f, 1.0f );
 
@@ -160,14 +160,14 @@ static int RideHeightTest( void )
 	printf( "    ride height %.3f, settle %.2f s\n", height, settleTime );
 
 	ENSURE( settleTime > 0.0f && settleTime < 2.5f );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
-	b3VehicleState state = b3Vehicle_GetState( vehicleId );
+	b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 	ENSURE( state.wheelsInContact == 4 );
 
 	for ( int i = 0; i < 4; ++i )
 	{
-		b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, i );
+		b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, i );
 		printf( "    wheel %d compression %.2f load %.0f\n", i, ws.compression, ws.load );
 		ENSURE( ws.hasContact );
 		ENSURE( 0.2f < ws.compression && ws.compression < 0.6f );
@@ -182,18 +182,18 @@ static int RideHeightTest( void )
 	return 0;
 }
 
-static float AccelerateTo( b3WorldId worldId, b3VehicleId vehicleId, float targetSpeed, float maxTime, int* maxGear,
+static float AccelerateTo( b3WorldId worldId, b3WheeledVehicleId wheeledVehicleId, float targetSpeed, float maxTime, int* maxGear,
 						   bool* gearsInOrder )
 {
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
-	int lastGear = b3Vehicle_GetState( vehicleId ).gear;
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
+	int lastGear = b3WheeledVehicle_GetState( wheeledVehicleId ).gear;
 	*gearsInOrder = true;
 	float time = 0.0f;
 	while ( time < maxTime )
 	{
 		Step( worldId, 1 );
 		time += VEHICLE_DT;
-		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 		if ( state.gear < lastGear )
 		{
 			*gearsInOrder = false;
@@ -214,22 +214,22 @@ static float AccelerateTo( b3WorldId worldId, b3VehicleId vehicleId, float targe
 
 static int AccelerationTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
 	Step( worldId, 120 );
 
 	int maxGear = 0;
 	bool inOrder = true;
-	float time = AccelerateTo( worldId, vehicleId, 100.0f * KMH, 30.0f, &maxGear, &inOrder );
+	float time = AccelerateTo( worldId, wheeledVehicleId, 100.0f * KMH, 30.0f, &maxGear, &inOrder );
 	printf( "    0-100 km/h %.2f s, gear %d\n", time, maxGear );
 	ENSURE( 4.0f < time && time < 11.0f );
 	ENSURE( maxGear >= 3 );
 	ENSURE( inOrder );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	// Keeps driving straight
-	b3Vec3 p = b3ToVec3( b3Body_GetPosition( b3Vehicle_GetChassisBody( vehicleId ) ) );
+	b3Vec3 p = b3ToVec3( b3Body_GetPosition( b3WheeledVehicle_GetChassisBody( wheeledVehicleId ) ) );
 	ENSURE( fabsf( p.x ) < 1.0f );
 
 	b3DestroyWorld( worldId );
@@ -241,27 +241,27 @@ static int AccelerationTest( void )
 // holding flat until it locks.
 static int LaunchRevsTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
 
 	float idle = def.engine.idleRpm;
 	float launch = idle + 0.35f * ( def.engine.maxRpm - def.engine.idleRpm );
-	ENSURE( b3Vehicle_GetState( vehicleId ).engineRpm < idle + 50.0f );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).engineRpm < idle + 50.0f );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 1 );
-	float firstStep = b3Vehicle_GetState( vehicleId ).engineRpm;
+	float firstStep = b3WheeledVehicle_GetState( wheeledVehicleId ).engineRpm;
 
 	// The rpm at 0.4 s, once the engine has spun up, and at 0.8 s, both while the wheels in
 	// first still turn slower than the engine, so the clutch slips
 	Step( worldId, 23 );
-	b3VehicleState early = b3Vehicle_GetState( vehicleId );
+	b3WheeledVehicleState early = b3WheeledVehicle_GetState( wheeledVehicleId );
 	Step( worldId, 24 );
-	b3VehicleState late = b3Vehicle_GetState( vehicleId );
-	b3VehicleWheelState wheel = b3Vehicle_GetWheelState( vehicleId, 2 );
+	b3WheeledVehicleState late = b3WheeledVehicle_GetState( wheeledVehicleId );
+	b3WheeledVehicleWheelState wheel = b3WheeledVehicle_GetWheelState( wheeledVehicleId, 2 );
 	float wheelRpm = wheel.angularVelocity * def.transmission.gearRatios[0] * def.transmission.finalDrive * 60.0f /
 					 ( 2.0f * B3_PI );
 
@@ -272,7 +272,7 @@ static int LaunchRevsTest( void )
 	ENSURE( early.engineRpm > idle + 0.6f * ( launch - idle ) );
 	ENSURE( late.gear == 1 && wheelRpm < late.engineRpm - 100.0f );
 	ENSURE( late.engineRpm > early.engineRpm + 150.0f );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	b3DestroyWorld( worldId );
 	return 0;
@@ -282,24 +282,24 @@ static int LaunchRevsTest( void )
 // the car bogs and creeps away rather than revving to the launch rpm.
 static int HighGearStartTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
-	def.transmission.mode = b3_vehicleTransmissionManual;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.transmission.mode = b3_wheeledVehicleTransmissionManual;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
-	b3Vehicle_SetGear( vehicleId, def.transmission.gearCount );
+	b3WheeledVehicle_SetGear( wheeledVehicleId, def.transmission.gearCount );
 	Step( worldId, 30 );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	float maxRpm = 0.0f;
 	for ( int i = 0; i < 120; ++i )
 	{
 		Step( worldId, 1 );
-		maxRpm = b3MaxFloat( maxRpm, b3Vehicle_GetState( vehicleId ).engineRpm );
+		maxRpm = b3MaxFloat( maxRpm, b3WheeledVehicle_GetState( wheeledVehicleId ).engineRpm );
 	}
 
-	b3VehicleState state = b3Vehicle_GetState( vehicleId );
+	b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 	float idle = def.engine.idleRpm;
 	float launch = idle + 0.35f * ( def.engine.maxRpm - def.engine.idleRpm );
 	printf( "    top gear start: at most %.0f rpm (launch rpm %.0f), %.1f km/h after 2 s\n", maxRpm, launch,
@@ -307,7 +307,7 @@ static int HighGearStartTest( void )
 	ENSURE( state.gear == def.transmission.gearCount );
 	ENSURE( maxRpm < idle + 0.5f * ( launch - idle ) );
 	ENSURE( state.speed > 1.0f * KMH );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	b3DestroyWorld( worldId );
 	return 0;
@@ -318,22 +318,22 @@ static int HighGearStartTest( void )
 // Launch control is off so this measures traction control alone.
 static float LaunchSlip( bool tractionControl, float forward )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.assists.tractionControl = tractionControl;
 	def.assists.launchControl = false;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = forward } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = forward } );
 	float maxSlip = 0.0f;
 	for ( int i = 0; i < 120; ++i )
 	{
 		Step( worldId, 1 );
 		for ( int j = 2; j < 4; ++j )
 		{
-			float sr = b3Vehicle_GetWheelState( vehicleId, j ).slipRatio;
+			float sr = b3WheeledVehicle_GetWheelState( wheeledVehicleId, j ).slipRatio;
 			maxSlip = b3MaxFloat( maxSlip, forward * sr );
 		}
 	}
@@ -346,22 +346,22 @@ static float LaunchSlip( bool tractionControl, float forward )
 // Launch control is off so it cannot still be active when the corner starts.
 static float PowerOversteer( bool tractionControl )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.assists.tractionControl = tractionControl;
 	def.assists.launchControl = false;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 60 );
 
 	int maxGear = 0;
 	bool inOrder;
 	float maxSideslip = -1.0f;
-	if ( AccelerateTo( worldId, vehicleId, 70.0f * KMH, 30.0f, &maxGear, &inOrder ) > 0.0f )
+	if ( AccelerateTo( worldId, wheeledVehicleId, 70.0f * KMH, 30.0f, &maxGear, &inOrder ) > 0.0f )
 	{
 		maxSideslip = 0.0f;
-		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .steer = 1.0f } );
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f, .steer = 1.0f } );
 		for ( int i = 0; i < 240; ++i )
 		{
 			Step( worldId, 1 );
@@ -423,23 +423,23 @@ typedef struct LaunchResult
 // spin them for a moment when traction control is off.
 static LaunchResult LaunchRun( bool launchControl, bool tractionControl )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.assists.launchControl = launchControl;
 	def.assists.tractionControl = tractionControl;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
 
 	LaunchResult result = { 0.0f, 0.0f, -1.0f, false, false, false, false };
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	for ( int i = 0; i < 480; ++i )
 	{
 		Step( worldId, 1 );
-		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 		for ( int j = 2; j < 4; ++j )
 		{
-			float slip = b3Vehicle_GetWheelState( vehicleId, j ).slipRatio;
+			float slip = b3WheeledVehicle_GetWheelState( wheeledVehicleId, j ).slipRatio;
 			result.maxSlip = b3MaxFloat( result.maxSlip, slip );
 			if ( state.isLaunching )
 			{
@@ -455,10 +455,10 @@ static LaunchResult LaunchRun( bool launchControl, bool tractionControl )
 		}
 	}
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ 0 } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ 0 } );
 	Step( worldId, 1 );
-	result.clearedOnLift = b3Vehicle_GetState( vehicleId ).isLaunching == false;
-	result.finite = VehicleIsFinite( vehicleId );
+	result.clearedOnLift = b3WheeledVehicle_GetState( wheeledVehicleId ).isLaunching == false;
+	result.finite = WheeledVehicleIsFinite( wheeledVehicleId );
 	b3DestroyWorld( worldId );
 	return result;
 }
@@ -467,7 +467,7 @@ static LaunchResult LaunchRun( bool launchControl, bool tractionControl )
 // or off, and hands back once the tires grip
 static int LaunchControlTest( void )
 {
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	ENSURE( def.assists.launchControl );
 	float peakSlip = def.wheels[2].tire.longitudinalPeakSlip;
 
@@ -500,45 +500,45 @@ static int SlipRelaxationTest( void )
 	float relaxations[2] = { 0.0f, 0.3f };
 	for ( int k = 0; k < 2; ++k )
 	{
-		b3WorldId worldId = CreateVehicleWorld( 1 );
+		b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 		CreateFlatGround( worldId );
-		b3VehicleDef def = b3DefaultVehicleDef();
+		b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 		def.assists.launchControl = false;
 		def.assists.tractionControl = false;
 		for ( int j = 0; j < def.wheelCount; ++j )
 		{
 			def.wheels[j].tire.longitudinalRelaxationLength = relaxations[k];
 		}
-		b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+		b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 		Step( worldId, 120 );
 
 		// The largest driven slip over the first 0.1 s of full throttle, which leaves the engine time
 		// to spin up to the launch rpm
 		early[k] = 0.0f;
-		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 		for ( int i = 0; i < 6; ++i )
 		{
 			Step( worldId, 1 );
 			for ( int j = 2; j < 4; ++j )
 			{
-				early[k] = b3MaxFloat( early[k], b3Vehicle_GetWheelState( vehicleId, j ).slipRatio );
+				early[k] = b3MaxFloat( early[k], b3WheeledVehicle_GetWheelState( wheeledVehicleId, j ).slipRatio );
 			}
 		}
 
 		// Cruise, then compare the reported slip with the plain ratio
 		if ( k == 1 )
 		{
-			b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 0.3f } );
+			b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 0.3f } );
 			Step( worldId, 420 );
-			float speed = b3Vehicle_GetState( vehicleId ).speed;
-			b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, 2 );
+			float speed = b3WheeledVehicle_GetState( wheeledVehicleId ).speed;
+			b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, 2 );
 			float plain = ( ws.angularVelocity * def.wheels[2].radius - speed ) / speed;
 			printf( "    at %.1f m/s: slip %.4f, plain ratio %.4f\n", speed, ws.slipRatio, plain );
 			ENSURE( speed > 10.0f );
 			ENSURE( fabsf( ws.slipRatio - plain ) < 0.02f );
 		}
 
-		ENSURE( VehicleIsFinite( vehicleId ) );
+		ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 		b3DestroyWorld( worldId );
 	}
 
@@ -550,17 +550,17 @@ static int SlipRelaxationTest( void )
 
 static float BrakingDistance( bool abs )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.assists.abs = abs;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 60 );
 
 	int maxGear = 0;
 	bool inOrder;
-	float time = AccelerateTo( worldId, vehicleId, 100.0f * KMH, 30.0f, &maxGear, &inOrder );
+	float time = AccelerateTo( worldId, wheeledVehicleId, 100.0f * KMH, 30.0f, &maxGear, &inOrder );
 	if ( time < 0.0f )
 	{
 		b3DestroyWorld( worldId );
@@ -568,15 +568,15 @@ static float BrakingDistance( bool abs )
 	}
 
 	b3Vec3 start = b3ToVec3( b3Body_GetPosition( chassisId ) );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f } );
 	float elapsed = 0.0f;
-	while ( b3Vehicle_GetState( vehicleId ).speed > 0.05f && elapsed < 20.0f )
+	while ( b3WheeledVehicle_GetState( wheeledVehicleId ).speed > 0.05f && elapsed < 20.0f )
 	{
 		Step( worldId, 1 );
 		elapsed += VEHICLE_DT;
 	}
 
-	bool finite = VehicleIsFinite( vehicleId );
+	bool finite = WheeledVehicleIsFinite( wheeledVehicleId );
 	b3Vec3 end = b3ToVec3( b3Body_GetPosition( chassisId ) );
 	b3DestroyWorld( worldId );
 	return finite ? b3Distance( start, end ) : -1.0f;
@@ -597,17 +597,17 @@ static int BrakingTest( void )
 // and the heading change
 static float BrakeTurn( bool abs, float* heading )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.assists.abs = abs;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 60 );
 
 	int maxGear = 0;
 	bool inOrder;
-	if ( AccelerateTo( worldId, vehicleId, 90.0f * KMH, 30.0f, &maxGear, &inOrder ) < 0.0f )
+	if ( AccelerateTo( worldId, wheeledVehicleId, 90.0f * KMH, 30.0f, &maxGear, &inOrder ) < 0.0f )
 	{
 		*heading = 0.0f;
 		b3DestroyWorld( worldId );
@@ -616,7 +616,7 @@ static float BrakeTurn( bool abs, float* heading )
 
 	b3Vec3 forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
 	float yaw0 = atan2f( forward.x, forward.z );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f, .steer = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f, .steer = 1.0f } );
 	int locked = 0;
 	int steps = 90;
 	for ( int i = 0; i < steps; ++i )
@@ -624,7 +624,7 @@ static float BrakeTurn( bool abs, float* heading )
 		Step( worldId, 1 );
 		for ( int j = 0; j < 2; ++j )
 		{
-			if ( b3Vehicle_GetWheelState( vehicleId, j ).slipRatio < -0.5f )
+			if ( b3WheeledVehicle_GetWheelState( wheeledVehicleId, j ).slipRatio < -0.5f )
 			{
 				locked += 1;
 				break;
@@ -635,7 +635,7 @@ static float BrakeTurn( bool abs, float* heading )
 	forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
 	float turn = atan2f( forward.x, forward.z ) - yaw0;
 	*heading = fabsf( atan2f( sinf( turn ), cosf( turn ) ) );
-	bool finite = VehicleIsFinite( vehicleId );
+	bool finite = WheeledVehicleIsFinite( wheeledVehicleId );
 	b3DestroyWorld( worldId );
 	return finite ? (float)locked / steps : -1.0f;
 }
@@ -655,12 +655,12 @@ static int BrakeTurnTest( void )
 	return 0;
 }
 
-static float TurnRadius( const b3VehicleDef* def, float steer, float speed, float* maxRoll )
+static float TurnRadius( const b3WheeledVehicleDef* def, float steer, float speed, float* maxRoll )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, def );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 60 );
 
 	// Simple speed controller
@@ -668,10 +668,10 @@ static float TurnRadius( const b3VehicleDef* def, float steer, float speed, floa
 	*maxRoll = 0.0f;
 	for ( int i = 0; i < 900; ++i )
 	{
-		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 		float forward = b3ClampFloat( 0.5f * ( speed - state.speed ), -1.0f, 1.0f );
 		bool turning = i > 240;
-		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = forward, .steer = turning ? steer : 0.0f } );
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = forward, .steer = turning ? steer : 0.0f } );
 		Step( worldId, 1 );
 
 		if ( i > 600 )
@@ -685,7 +685,7 @@ static float TurnRadius( const b3VehicleDef* def, float steer, float speed, floa
 		}
 	}
 
-	if ( VehicleIsFinite( vehicleId ) == false )
+	if ( WheeledVehicleIsFinite( wheeledVehicleId ) == false )
 	{
 		radius = -1.0f;
 	}
@@ -696,7 +696,7 @@ static float TurnRadius( const b3VehicleDef* def, float steer, float speed, floa
 
 static int TurningTest( void )
 {
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	float roll;
 	float radius = TurnRadius( &def, 1.0f, 5.0f, &roll );
 	printf( "    turning radius at 5 m/s full lock %.2f m\n", radius );
@@ -715,7 +715,7 @@ static int TurningTest( void )
 
 static int AntiRollTest( void )
 {
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	float rollWith, rollWithout;
 	TurnRadius( &def, 0.6f, 15.0f, &rollWith );
 
@@ -730,17 +730,17 @@ static int AntiRollTest( void )
 
 static float SlopeDrift( float angleDegrees, bool sideways, float handbrake )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	float angle = angleDegrees * B3_PI / 180.0f;
 	b3Vec3 axis = sideways ? b3Vec3_axisZ : b3Vec3_axisX;
 	b3Quat q = b3MakeQuatFromAxisAngle( axis, angle );
 	CreateGroundBox( worldId, (b3Pos){ 0.0f, -1.0f, 0.0f }, q, (b3Vec3){ 100.0f, 1.0f, 100.0f }, 0.6f );
 
 	b3BodyId chassisId = CreateChassis( worldId, (b3Pos){ 0.0f, 0.7f, 0.0f }, q );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.chassisId = chassisId;
-	b3VehicleId vehicleId = b3CreateVehicle( worldId, &def );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .handbrake = handbrake } );
+	b3WheeledVehicleId wheeledVehicleId = b3CreateWheeledVehicle( worldId, &def );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .handbrake = handbrake } );
 
 	// Settle, then measure the drift
 	Step( worldId, 120 );
@@ -748,7 +748,7 @@ static float SlopeDrift( float angleDegrees, bool sideways, float handbrake )
 	Step( worldId, 300 );
 	b3Vec3 end = b3ToVec3( b3Body_GetPosition( chassisId ) );
 
-	float drift = VehicleIsFinite( vehicleId ) ? b3Distance( start, end ) : FLT_MAX;
+	float drift = WheeledVehicleIsFinite( wheeledVehicleId ) ? b3Distance( start, end ) : FLT_MAX;
 	b3DestroyWorld( worldId );
 	return drift;
 }
@@ -771,7 +771,7 @@ static int SlopeHoldTest( void )
 // A kinematic platform carries the car, then the car drives onto a dynamic slab and off it
 static int DynamicGroundTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
 
 	b3BodyDef bodyDef = b3DefaultBodyDef();
@@ -782,8 +782,8 @@ static int DynamicGroundTest( void )
 	b3ShapeDef shapeDef = b3DefaultShapeDef();
 	b3CreateHullShape( platformId, &shapeDef, &box.base );
 
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 1.1f, 0.0f }, NULL );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 1.1f, 0.0f }, NULL );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 120 );
 
 	b3Body_SetLinearVelocity( platformId, (b3Vec3){ 1.0f, 0.0f, 0.0f } );
@@ -791,7 +791,7 @@ static int DynamicGroundTest( void )
 	b3Vec3 v = b3Body_GetLinearVelocity( chassisId );
 	printf( "    carried velocity %.3f %.3f %.3f\n", v.x, v.y, v.z );
 	ENSURE( fabsf( v.x - 1.0f ) < 0.05f );
-	ENSURE( b3Vehicle_GetWheelState( vehicleId, 0 ).hasContact );
+	ENSURE( b3WheeledVehicle_GetWheelState( wheeledVehicleId, 0 ).hasContact );
 	b3Body_SetLinearVelocity( platformId, b3Vec3_zero );
 
 	// Dynamic slab in front. Its contact force with the ground grows by the car's weight.
@@ -819,17 +819,17 @@ static int DynamicGroundTest( void )
 		{
 			forward = 0.0f;
 		}
-		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = forward, .brake = onSlab ? 1.0f : 0.0f } );
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = forward, .brake = onSlab ? 1.0f : 0.0f } );
 		Step( worldId, 1 );
 
-		if ( fabsf( p.z - 12.0f ) < 1.0f && fabsf( b3Vehicle_GetState( vehicleId ).speed ) < 0.5f )
+		if ( fabsf( p.z - 12.0f ) < 1.0f && fabsf( b3WheeledVehicle_GetState( wheeledVehicleId ).speed ) < 0.5f )
 		{
 			onSlab = true;
 		}
 
 		if ( onSlab )
 		{
-			b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, 0 );
+			b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, 0 );
 			if ( ws.hasContact && b3Shape_GetBody( ws.groundShapeId ).index1 == slabId.index1 )
 			{
 				slabPush = b3MaxFloat( slabPush, ws.load );
@@ -846,18 +846,18 @@ static int DynamicGroundTest( void )
 	ENSURE( b3Length( slabVelocity ) < 0.5f );
 
 	// Drive off the slab back onto static ground
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 0.5f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 0.5f } );
 	Step( worldId, 300 );
-	b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, 0 );
+	b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, 0 );
 	ENSURE( ws.hasContact );
 	ENSURE( b3Shape_GetBody( ws.groundShapeId ).index1 != slabId.index1 );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	// Destroying the ground body under a wheel must not break the vehicle
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ 0 } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ 0 } );
 	b3DestroyBody( slabId );
 	Step( worldId, 60 );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	b3DestroyWorld( worldId );
 	return 0;
@@ -866,16 +866,16 @@ static int DynamicGroundTest( void )
 // Hits a ramp: no upshift on landing and the bump stop keeps the wheels out of the ground
 static int RampJumpTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
 	b3Quat q = b3MakeQuatFromAxisAngle( b3Vec3_axisX, -15.0f * B3_PI / 180.0f );
 	CreateGroundBox( worldId, (b3Pos){ 0.0f, -0.4f, 60.0f }, q, (b3Vec3){ 4.0f, 1.0f, 6.0f }, 0.6f );
 
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 60 );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	bool airborne = false;
 	bool landed = false;
 	int gearAtTakeoff = 0;
@@ -888,7 +888,7 @@ static int RampJumpTest( void )
 	for ( int i = 0; i < 900; ++i )
 	{
 		Step( worldId, 1 );
-		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 		float y = (float)b3Body_GetPosition( chassisId ).y;
 		maxHeight = b3MaxFloat( maxHeight, y );
 
@@ -918,7 +918,7 @@ static int RampJumpTest( void )
 			minHeight = b3MinFloat( minHeight, y );
 			for ( int j = 0; j < 4; ++j )
 			{
-				b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, j );
+				b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, j );
 				if ( ws.hasContact )
 				{
 					minLength = b3MinFloat( minLength, ws.suspensionLength );
@@ -937,32 +937,32 @@ static int RampJumpTest( void )
 	ENSURE( airborne && landed );
 	ENSURE( upshiftOnLanding == false );
 
-	b3VehicleWheelDef wheel = b3Vehicle_GetWheel( vehicleId, 0 );
+	b3WheeledVehicleWheelDef wheel = b3WheeledVehicle_GetWheel( wheeledVehicleId, 0 );
 	ENSURE( minLength > wheel.suspension.minLength - 0.1f );
 
 	// Chassis bottom stays above the ground
 	ENSURE( minHeight > 0.3f );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	b3DestroyWorld( worldId );
 	return 0;
 }
 
-static int RunNanScenario( const b3VehicleDef* def, b3Pos position, b3Quat rotation, b3VehicleInput input )
+static int RunNanScenario( const b3WheeledVehicleDef* def, b3Pos position, b3Quat rotation, b3WheeledVehicleInput input )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
 	b3BodyId chassisId = CreateChassis( worldId, position, rotation );
-	b3VehicleDef copy = *def;
+	b3WheeledVehicleDef copy = *def;
 	copy.chassisId = chassisId;
-	b3VehicleId vehicleId = b3CreateVehicle( worldId, &copy );
-	ENSURE( b3Vehicle_IsValid( vehicleId ) );
-	b3Vehicle_SetInput( vehicleId, input );
+	b3WheeledVehicleId wheeledVehicleId = b3CreateWheeledVehicle( worldId, &copy );
+	ENSURE( b3WheeledVehicle_IsValid( wheeledVehicleId ) );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, input );
 
 	for ( int i = 0; i < 300; ++i )
 	{
 		Step( worldId, 1 );
-		if ( VehicleIsFinite( vehicleId ) == false )
+		if ( WheeledVehicleIsFinite( wheeledVehicleId ) == false )
 		{
 			printf( "    non-finite at step %d\n", i );
 			b3DestroyWorld( worldId );
@@ -976,8 +976,8 @@ static int RunNanScenario( const b3VehicleDef* def, b3Pos position, b3Quat rotat
 
 static int RobustnessTest( void )
 {
-	b3VehicleInput full = { .forward = 1.0f, .steer = 1.0f, .handbrake = 1.0f };
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleInput full = { .forward = 1.0f, .steer = 1.0f, .handbrake = 1.0f };
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 
 	// Airborne and upside down
 	ENSURE( RunNanScenario( &def, (b3Pos){ 0.0f, 20.0f, 0.0f }, b3Quat_identity, full ) == 0 );
@@ -985,7 +985,7 @@ static int RobustnessTest( void )
 	ENSURE( RunNanScenario( &def, (b3Pos){ 0.0f, 1.0f, 0.0f }, flipped, full ) == 0 );
 
 	// Zero parameters
-	b3VehicleDef zero = b3DefaultVehicleDef();
+	b3WheeledVehicleDef zero = b3DefaultWheeledVehicleDef();
 	zero.chassis.mass = 0.0f;
 	zero.engine.maxTorque = 0.0f;
 	zero.engine.inertia = 0.0f;
@@ -996,7 +996,7 @@ static int RobustnessTest( void )
 	zero.drivetrain.differentialCount = 0;
 	for ( int i = 0; i < zero.wheelCount; ++i )
 	{
-		b3VehicleWheelDef* w = zero.wheels + i;
+		b3WheeledVehicleWheelDef* w = zero.wheels + i;
 		w->radius = 0.0f;
 		w->width = 0.0f;
 		w->inertia = 0.0f;
@@ -1013,14 +1013,14 @@ static int RobustnessTest( void )
 	ENSURE( RunNanScenario( &zero, (b3Pos){ 0.0f, 1.0f, 0.0f }, b3Quat_identity, full ) == 0 );
 
 	// Extreme parameters
-	b3VehicleDef extreme = b3DefaultVehicleDef();
+	b3WheeledVehicleDef extreme = b3DefaultWheeledVehicleDef();
 	extreme.chassis.mass = 1.0e5f;
 	extreme.engine.maxTorque = 1.0e6f;
 	extreme.transmission.clutchStrength = 1.0e6f;
 	extreme.assists.downforce = 1.0e3f;
 	for ( int i = 0; i < extreme.wheelCount; ++i )
 	{
-		b3VehicleWheelDef* w = extreme.wheels + i;
+		b3WheeledVehicleWheelDef* w = extreme.wheels + i;
 		w->suspension.frequency = 50.0f;
 		w->suspension.compressionDamping = 10.0f;
 		w->maxBrakeTorque = 1.0e7f;
@@ -1031,7 +1031,7 @@ static int RobustnessTest( void )
 	ENSURE( RunNanScenario( &extreme, (b3Pos){ 0.0f, 1.0f, 0.0f }, b3Quat_identity, full ) == 0 );
 
 	// Garbage values are sanitized
-	b3VehicleDef garbage = b3DefaultVehicleDef();
+	b3WheeledVehicleDef garbage = b3DefaultWheeledVehicleDef();
 	garbage.wheels[0].radius = NAN;
 	garbage.wheels[1].suspension.frequency = INFINITY;
 	garbage.engine.maxRpm = -5.0f;
@@ -1053,7 +1053,7 @@ static uint32_t HashBytes( uint32_t hash, const void* data, int size )
 
 static uint32_t DeterminismRun( int workerCount )
 {
-	b3WorldId worldId = CreateVehicleWorld( workerCount );
+	b3WorldId worldId = CreateWheeledVehicleWorld( workerCount );
 	CreateFlatGround( worldId );
 
 	// Loose boxes to drive through
@@ -1068,7 +1068,7 @@ static uint32_t DeterminismRun( int workerCount )
 		b3CreateHullShape( boxId, &shapeDef, &box.base );
 	}
 
-	b3VehicleId vehicles[3];
+	b3WheeledVehicleId vehicles[3];
 	for ( int i = 0; i < 3; ++i )
 	{
 		vehicles[i] = CreateCar( worldId, (b3Pos){ -4.0f + 4.0f * i, 0.6f, 0.0f }, NULL );
@@ -1080,17 +1080,17 @@ static uint32_t DeterminismRun( int workerCount )
 		for ( int j = 0; j < 3; ++j )
 		{
 			float t = i * VEHICLE_DT;
-			b3VehicleInput input = { .forward = 1.0f, .steer = 0.6f * sinf( 0.7f * t + j ), .handbrake = ( i / 90 ) % 4 == 3 };
-			b3Vehicle_SetInput( vehicles[j], input );
+			b3WheeledVehicleInput input = { .forward = 1.0f, .steer = 0.6f * sinf( 0.7f * t + j ), .handbrake = ( i / 90 ) % 4 == 3 };
+			b3WheeledVehicle_SetInput( vehicles[j], input );
 		}
 		Step( worldId, 1 );
 	}
 
 	for ( int j = 0; j < 3; ++j )
 	{
-		b3WorldTransform xf = b3Body_GetTransform( b3Vehicle_GetChassisBody( vehicles[j] ) );
+		b3WorldTransform xf = b3Body_GetTransform( b3WheeledVehicle_GetChassisBody( vehicles[j] ) );
 		hash = HashBytes( hash, &xf, sizeof( xf ) );
-		b3VehicleState state = b3Vehicle_GetState( vehicles[j] );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( vehicles[j] );
 		hash = HashBytes( hash, &state.engineRpm, sizeof( float ) );
 	}
 
@@ -1112,32 +1112,32 @@ static int DeterminismTest( void )
 
 static int DestroyTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId a = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
-	b3VehicleId b = CreateCar( worldId, (b3Pos){ 5.0f, 0.6f, 0.0f }, NULL );
+	b3WheeledVehicleId a = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3WheeledVehicleId b = CreateCar( worldId, (b3Pos){ 5.0f, 0.6f, 0.0f }, NULL );
 	Step( worldId, 10 );
-	ENSURE( b3World_GetVehicleCount( worldId ) == 2 );
+	ENSURE( b3World_GetWheeledVehicleCount( worldId ) == 2 );
 
-	b3BodyId chassisA = b3Vehicle_GetChassisBody( a );
+	b3BodyId chassisA = b3WheeledVehicle_GetChassisBody( a );
 	b3DestroyBody( chassisA );
-	ENSURE( b3Vehicle_IsValid( a ) == false );
-	ENSURE( b3Vehicle_IsValid( b ) );
-	ENSURE( b3World_GetVehicleCount( worldId ) == 1 );
+	ENSURE( b3WheeledVehicle_IsValid( a ) == false );
+	ENSURE( b3WheeledVehicle_IsValid( b ) );
+	ENSURE( b3World_GetWheeledVehicleCount( worldId ) == 1 );
 	Step( worldId, 10 );
 
-	b3BodyId chassisB = b3Vehicle_GetChassisBody( b );
+	b3BodyId chassisB = b3WheeledVehicle_GetChassisBody( b );
 	ENSURE( b3Body_GetJointCount( chassisB ) == 4 );
-	b3DestroyVehicle( b );
-	ENSURE( b3Vehicle_IsValid( b ) == false );
+	b3DestroyWheeledVehicle( b );
+	ENSURE( b3WheeledVehicle_IsValid( b ) == false );
 	ENSURE( b3Body_GetJointCount( chassisB ) == 0 );
-	ENSURE( b3World_GetVehicleCount( worldId ) == 0 );
+	ENSURE( b3World_GetWheeledVehicleCount( worldId ) == 0 );
 	Step( worldId, 10 );
 
 	// Slots are reused with a new generation
-	b3VehicleId c = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 5.0f }, NULL );
-	ENSURE( b3Vehicle_IsValid( c ) );
-	ENSURE( b3Vehicle_IsValid( a ) == false );
+	b3WheeledVehicleId c = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 5.0f }, NULL );
+	ENSURE( b3WheeledVehicle_IsValid( c ) );
+	ENSURE( b3WheeledVehicle_IsValid( a ) == false );
 	Step( worldId, 10 );
 
 	// Destroying the world with live vehicles must not leak
@@ -1147,10 +1147,10 @@ static int DestroyTest( void )
 
 static float RideHeightAt( float dt, int substeps )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.8f, 0.0f }, NULL );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.8f, 0.0f }, NULL );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	int steps = (int)( 4.0f / dt );
 	for ( int i = 0; i < steps; ++i )
 	{
@@ -1158,7 +1158,7 @@ static float RideHeightAt( float dt, int substeps )
 	}
 
 	// Drive a little to check the drivetrain too
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .steer = 0.3f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f, .steer = 0.3f } );
 	for ( int i = 0; i < steps; ++i )
 	{
 		b3World_Step( worldId, dt, substeps );
@@ -1166,14 +1166,14 @@ static float RideHeightAt( float dt, int substeps )
 	// Brake, then hold with the handbrake near a stop, since the brake selects reverse once stopped
 	for ( int i = 0; i < 2 * steps; ++i )
 	{
-		bool fast = b3Vehicle_GetState( vehicleId ).speed > 2.0f;
-		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
+		bool fast = b3WheeledVehicle_GetState( wheeledVehicleId ).speed > 2.0f;
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
 		b3World_Step( worldId, dt, substeps );
 	}
 
 	float height = (float)b3Body_GetPosition( chassisId ).y;
 	float speed = b3Length( b3Body_GetLinearVelocity( chassisId ) );
-	bool finite = VehicleIsFinite( vehicleId );
+	bool finite = WheeledVehicleIsFinite( wheeledVehicleId );
 	b3DestroyWorld( worldId );
 	if ( finite == false || speed > 0.05f )
 	{
@@ -1196,19 +1196,19 @@ static int TimeStepTest( void )
 
 static int LiveSettingsTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 180 );
 	float before = (float)b3Body_GetPosition( chassisId ).y;
 
 	// Preload raises the car
 	for ( int i = 0; i < 4; ++i )
 	{
-		b3VehicleWheelDef wheel = b3Vehicle_GetWheel( vehicleId, i );
+		b3WheeledVehicleWheelDef wheel = b3WheeledVehicle_GetWheel( wheeledVehicleId, i );
 		wheel.suspension.preload = 0.05f;
-		b3Vehicle_SetWheel( vehicleId, i, wheel );
+		b3WheeledVehicle_SetWheel( wheeledVehicleId, i, wheel );
 	}
 	Step( worldId, 180 );
 	float after = (float)b3Body_GetPosition( chassisId ).y;
@@ -1216,40 +1216,40 @@ static int LiveSettingsTest( void )
 	ENSURE( after > before + 0.03f );
 
 	// Mass change updates the sprung masses
-	b3VehicleChassis chassis = b3Vehicle_GetChassis( vehicleId );
+	b3WheeledVehicleChassis chassis = b3WheeledVehicle_GetChassis( wheeledVehicleId );
 	chassis.mass = 2000.0f;
-	b3Vehicle_SetChassis( vehicleId, chassis );
+	b3WheeledVehicle_SetChassis( wheeledVehicleId, chassis );
 	Step( worldId, 1 );
 	ENSURE_SMALL( b3Body_GetMass( chassisId ) - 2000.0f, 0.5f );
 	float total = 0.0f;
 	for ( int i = 0; i < 4; ++i )
 	{
-		total += b3Vehicle_GetSprungMass( vehicleId, i );
+		total += b3WheeledVehicle_GetSprungMass( wheeledVehicleId, i );
 	}
 	ENSURE_SMALL( total - 2000.0f, 1.0f );
 
-	// Manual gearbox follows b3Vehicle_SetGear
-	b3VehicleTransmission t = b3Vehicle_GetTransmission( vehicleId );
-	t.mode = b3_vehicleTransmissionManual;
-	b3Vehicle_SetTransmission( vehicleId, t );
-	b3Vehicle_SetGear( vehicleId, 2 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	// Manual gearbox follows b3WheeledVehicle_SetGear
+	b3WheeledVehicleTransmission t = b3WheeledVehicle_GetTransmission( wheeledVehicleId );
+	t.mode = b3_wheeledVehicleTransmissionManual;
+	b3WheeledVehicle_SetTransmission( wheeledVehicleId, t );
+	b3WheeledVehicle_SetGear( wheeledVehicleId, 2 );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 600 );
-	ENSURE( b3Vehicle_GetState( vehicleId ).gear == 2 );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).gear == 2 );
 
-	b3Vehicle_SetGear( vehicleId, -1 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	b3WheeledVehicle_SetGear( wheeledVehicleId, -1 );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f } );
 	Step( worldId, 300 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 120 );
-	ENSURE( b3Vehicle_GetState( vehicleId ).speed < -1.0f );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).speed < -1.0f );
 
 	// Reset puts the car back upright and still
-	b3Vehicle_Reset( vehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ 0 } );
+	b3WheeledVehicle_Reset( wheeledVehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ 0 } );
 	ENSURE( b3Length( b3Body_GetLinearVelocity( chassisId ) ) == 0.0f );
 	Step( worldId, 120 );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	b3DestroyWorld( worldId );
 	return 0;
@@ -1257,26 +1257,26 @@ static int LiveSettingsTest( void )
 
 static int SleepTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 	Step( worldId, 300 );
 	ENSURE( b3Body_IsAwake( chassisId ) == false );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	ENSURE( b3Body_IsAwake( chassisId ) );
 	Step( worldId, 60 );
-	ENSURE( b3Vehicle_GetState( vehicleId ).speed > 1.0f );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).speed > 1.0f );
 
 	// Brake, then hold with the handbrake near a stop, since the brake selects reverse once stopped
 	for ( int i = 0; i < 120; ++i )
 	{
-		bool fast = b3Vehicle_GetState( vehicleId ).speed > 2.0f;
-		b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
+		bool fast = b3WheeledVehicle_GetState( wheeledVehicleId ).speed > 2.0f;
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = fast ? 1.0f : 0.0f, .handbrake = fast ? 0.0f : 1.0f } );
 		Step( worldId, 1 );
 	}
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ 0 } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ 0 } );
 	Step( worldId, 300 );
 	ENSURE( b3Body_IsAwake( chassisId ) == false );
 
@@ -1286,27 +1286,27 @@ static int SleepTest( void )
 
 // Reads the bulk wheel data and checks every wheel against the per wheel getters. Returns 0 when
 // every check passes, and the number of wheels with each flag set through the counts.
-static int CheckWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int* contactCount, int* stickyCount )
+static int CheckWheelData( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleWheelData* data, int* contactCount, int* stickyCount )
 {
-	int count = b3Vehicle_GetWheelData( vehicleId, data, B3_MAX_VEHICLE_WHEELS );
-	ENSURE( count == b3Vehicle_GetWheelCount( vehicleId ) );
+	int count = b3WheeledVehicle_GetWheelData( wheeledVehicleId, data, B3_MAX_VEHICLE_WHEELS );
+	ENSURE( count == b3WheeledVehicle_GetWheelCount( wheeledVehicleId ) );
 
 	*contactCount = 0;
 	*stickyCount = 0;
 	for ( int i = 0; i < count; ++i )
 	{
-		b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, i );
-		b3WorldTransform xf = b3Vehicle_GetWheelTransform( vehicleId, i );
-		const b3VehicleWheelData* d = data + i;
+		b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, i );
+		b3WorldTransform xf = b3WheeledVehicle_GetWheelTransform( wheeledVehicleId, i );
+		const b3WheeledVehicleWheelData* d = data + i;
 
 		ENSURE_SMALL( d->position.x - (float)xf.p.x, 1e-4f );
 		ENSURE_SMALL( d->position.y - (float)xf.p.y, 1e-4f );
 		ENSURE_SMALL( d->position.z - (float)xf.p.z, 1e-4f );
 		ENSURE( d->rotation.v.x == xf.q.v.x && d->rotation.v.y == xf.q.v.y && d->rotation.v.z == xf.q.v.z &&
 				d->rotation.s == xf.q.s );
-		ENSURE( ( ( d->flags & b3_vehicleWheelContact ) != 0 ) == ws.hasContact );
-		ENSURE( ( ( d->flags & b3_vehicleWheelSticky ) != 0 ) == ws.isSticky );
-		ENSURE( ( d->flags & ~( b3_vehicleWheelContact | b3_vehicleWheelSticky ) ) == 0 );
+		ENSURE( ( ( d->flags & b3_wheeledVehicleWheelContact ) != 0 ) == ws.hasContact );
+		ENSURE( ( ( d->flags & b3_wheeledVehicleWheelSticky ) != 0 ) == ws.isSticky );
+		ENSURE( ( d->flags & ~( b3_wheeledVehicleWheelContact | b3_wheeledVehicleWheelSticky ) ) == 0 );
 		ENSURE( d->contactPoint.x == (float)ws.contactPoint.x && d->contactPoint.y == (float)ws.contactPoint.y &&
 				d->contactPoint.z == (float)ws.contactPoint.z );
 		ENSURE( d->contactNormal.x == ws.contactNormal.x && d->contactNormal.y == ws.contactNormal.y &&
@@ -1330,23 +1330,23 @@ static int CheckWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int*
 // The bulk wheel readout matches the per wheel getters parked, driving and airborne
 static int WheelDataTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 1.0f, 0.0f }, NULL );
-	b3BodyId chassisId = b3Vehicle_GetChassisBody( vehicleId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 1.0f, 0.0f }, NULL );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
 
-	b3VehicleWheelData data[B3_MAX_VEHICLE_WHEELS];
+	b3WheeledVehicleWheelData data[B3_MAX_VEHICLE_WHEELS];
 	int contactCount, stickyCount;
 
 	// Parked: the sticky tires hold the car
 	Step( worldId, 180 );
-	ENSURE( CheckWheelData( vehicleId, data, &contactCount, &stickyCount ) == 0 );
+	ENSURE( CheckWheelData( wheeledVehicleId, data, &contactCount, &stickyCount ) == 0 );
 	ENSURE( contactCount == 4 && stickyCount == 4 );
 
 	// Driving and turning: the front wheels are steered
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .steer = 0.5f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f, .steer = 0.5f } );
 	Step( worldId, 60 );
-	ENSURE( CheckWheelData( vehicleId, data, &contactCount, &stickyCount ) == 0 );
+	ENSURE( CheckWheelData( wheeledVehicleId, data, &contactCount, &stickyCount ) == 0 );
 	ENSURE( contactCount == 4 && stickyCount == 0 );
 	ENSURE( data[0].steerAngle != 0.0f && data[0].load > 0.0f );
 	ENSURE( B3_IS_NON_NULL( data[0].groundShapeId ) );
@@ -1355,7 +1355,7 @@ static int WheelDataTest( void )
 	// previous step's solve, so they clear one step after the contact does.
 	b3Body_SetTransform( chassisId, (b3Pos){ 0.0f, 50.0f, 0.0f }, b3Quat_identity );
 	Step( worldId, 2 );
-	ENSURE( CheckWheelData( vehicleId, data, &contactCount, &stickyCount ) == 0 );
+	ENSURE( CheckWheelData( wheeledVehicleId, data, &contactCount, &stickyCount ) == 0 );
 	ENSURE( contactCount == 0 && stickyCount == 0 );
 	for ( int i = 0; i < 4; ++i )
 	{
@@ -1367,11 +1367,11 @@ static int WheelDataTest( void )
 	}
 
 	// Capacity limits the write, and a negative capacity writes nothing
-	b3VehicleWheelData partial[3] = { 0 };
+	b3WheeledVehicleWheelData partial[3] = { 0 };
 	partial[2].load = -1.0f;
-	ENSURE( b3Vehicle_GetWheelData( vehicleId, partial, 2 ) == 2 );
+	ENSURE( b3WheeledVehicle_GetWheelData( wheeledVehicleId, partial, 2 ) == 2 );
 	ENSURE( partial[2].load == -1.0f );
-	ENSURE( b3Vehicle_GetWheelData( vehicleId, partial, -1 ) == 0 );
+	ENSURE( b3WheeledVehicle_GetWheelData( wheeledVehicleId, partial, -1 ) == 0 );
 
 	b3DestroyWorld( worldId );
 	return 0;
@@ -1381,7 +1381,7 @@ static int WheelDataTest( void )
 // sits, uses a second material with the given friction. The left half keeps friction 0.6.
 static float MeshMaterialLaunchSpeed( float rightFriction )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 
 	b3Vec3 vertices[6] = {
 		{ -200.0f, 0.0f, -200.0f }, { 0.0f, 0.0f, -200.0f }, { 200.0f, 0.0f, -200.0f },
@@ -1409,11 +1409,11 @@ static float MeshMaterialLaunchSpeed( float rightFriction )
 	shapeDef.materialCount = 2;
 	b3CreateMeshShape( groundId, &shapeDef, mesh, (b3Vec3){ 1.0f, 1.0f, 1.0f } );
 
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 20.0f, 0.6f, 0.0f }, NULL );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 20.0f, 0.6f, 0.0f }, NULL );
 	Step( worldId, 120 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 60 );
-	float speed = b3Vehicle_GetState( vehicleId ).speed;
+	float speed = b3WheeledVehicle_GetState( wheeledVehicleId ).speed;
 
 	b3DestroyWorld( worldId );
 	b3DestroyMesh( mesh );
@@ -1435,15 +1435,15 @@ static int MeshMaterialTest( void )
 // has reported any load for it
 static int TouchdownBrakeTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.assists.abs = true;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 2.0f, 0.0f }, &def );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 2.0f, 0.0f }, &def );
 
 	// Moving, so the sticky tire does not engage and hold the wheels instead of ABS
-	b3Body_SetLinearVelocity( b3Vehicle_GetChassisBody( vehicleId ), (b3Vec3){ 0.0f, 0.0f, 15.0f } );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	b3Body_SetLinearVelocity( b3WheeledVehicle_GetChassisBody( wheeledVehicleId ), (b3Vec3){ 0.0f, 0.0f, 15.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f } );
 
 	bool touched = false;
 	for ( int i = 0; i < 120 && touched == false; ++i )
@@ -1451,7 +1451,7 @@ static int TouchdownBrakeTest( void )
 		Step( worldId, 1 );
 		for ( int j = 0; j < 4; ++j )
 		{
-			b3VehicleWheelState ws = b3Vehicle_GetWheelState( vehicleId, j );
+			b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, j );
 			if ( ws.hasContact )
 			{
 				printf( "    wheel %d first contact: load %.0f N, brake %.0f N*m, sticky %d\n", j, ws.load, ws.brakeTorque,
@@ -1472,22 +1472,22 @@ static int TouchdownBrakeTest( void )
 // gear, then selects reverse and drives backward once stopped
 static int BrakeReverseTest( void )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
 	Step( worldId, 60 );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 180 );
-	ENSURE( b3Vehicle_GetState( vehicleId ).speed > 5.0f );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).speed > 5.0f );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f } );
 	bool reversed = false;
 	float minSpeed = FLT_MAX;
 	for ( int i = 0; i < 600; ++i )
 	{
 		Step( worldId, 1 );
-		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 		minSpeed = b3MinFloat( minSpeed, state.speed );
 		if ( state.speed > 2.0f )
 		{
@@ -1501,7 +1501,7 @@ static int BrakeReverseTest( void )
 		}
 	}
 
-	b3VehicleState state = b3Vehicle_GetState( vehicleId );
+	b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 	printf( "    brake reverse: gear %d, speed %.2f m/s, throttle %.2f\n", state.gear, minSpeed, state.throttle );
 	ENSURE( reversed );
 	ENSURE( state.gear == -1 );
@@ -1509,33 +1509,33 @@ static int BrakeReverseTest( void )
 	ENSURE( minSpeed < -2.0f );
 
 	// With forward input the brake stays a brake
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f, .brake = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f, .brake = 1.0f } );
 	Step( worldId, 1 );
-	ENSURE( b3Vehicle_GetState( vehicleId ).brake == 1.0f );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).brake == 1.0f );
 
 	// With the assist off the brake holds the car still
-	b3VehicleAssists assists = b3Vehicle_GetAssists( vehicleId );
+	b3WheeledVehicleAssists assists = b3WheeledVehicle_GetAssists( wheeledVehicleId );
 	ENSURE( assists.brakeReverse );
 	assists.brakeReverse = false;
-	b3Vehicle_SetAssists( vehicleId, assists );
-	b3Vehicle_Reset( vehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .brake = 1.0f } );
+	b3WheeledVehicle_SetAssists( wheeledVehicleId, assists );
+	b3WheeledVehicle_Reset( wheeledVehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f } );
 	Step( worldId, 180 );
-	state = b3Vehicle_GetState( vehicleId );
+	state = b3WheeledVehicle_GetState( wheeledVehicleId );
 	printf( "    brake reverse off: gear %d, speed %.3f m/s\n", state.gear, state.speed );
 	ENSURE( state.gear > 0 );
 	ENSURE( state.brake == 1.0f && state.throttle == 0.0f );
 	ENSURE( fabsf( state.speed ) < 0.05f );
 
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 	b3DestroyWorld( worldId );
 	return 0;
 }
 
-static b3VehicleTurbo SingleTurbo( void )
+static b3WheeledVehicleTurbo SingleTurbo( void )
 {
-	b3VehicleTurbo turbo = { 0 };
-	turbo.stages[0] = (b3VehicleTurboStage){
+	b3WheeledVehicleTurbo turbo = { 0 };
+	turbo.stages[0] = (b3WheeledVehicleTurboStage){
 		.gain = 0.5f,
 		.spoolRpm = 2000.0f,
 		.fullBoostRpm = 3500.0f,
@@ -1547,27 +1547,27 @@ static b3VehicleTurbo SingleTurbo( void )
 
 // Full throttle to 100 km/h. Returns the time, and the lowest boost seen after the boost first
 // came within 90% of the full gain, which is where the shifts cut the throttle.
-static float TurboLaunch( const b3VehicleTurbo* turbo, float* peakBoost, float* minBoostAfterPeak )
+static float TurboLaunch( const b3WheeledVehicleTurbo* turbo, float* peakBoost, float* minBoostAfterPeak )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	if ( turbo != NULL )
 	{
 		def.turbo = *turbo;
 	}
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
 
 	float gain = turbo != NULL ? turbo->stages[0].gain + turbo->stages[1].gain : 0.0f;
 	*peakBoost = 0.0f;
 	*minBoostAfterPeak = FLT_MAX;
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	float time = -1.0f;
 	for ( int i = 0; i < 30 * 60; ++i )
 	{
 		Step( worldId, 1 );
-		b3VehicleState state = b3Vehicle_GetState( vehicleId );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
 		*peakBoost = b3MaxFloat( *peakBoost, state.boost );
 		if ( gain > 0.0f && *peakBoost > 0.9f * gain )
 		{
@@ -1580,7 +1580,7 @@ static float TurboLaunch( const b3VehicleTurbo* turbo, float* peakBoost, float* 
 		}
 	}
 
-	if ( VehicleIsFinite( vehicleId ) == false )
+	if ( WheeledVehicleIsFinite( wheeledVehicleId ) == false )
 	{
 		time = -1.0f;
 	}
@@ -1591,27 +1591,27 @@ static float TurboLaunch( const b3VehicleTurbo* turbo, float* peakBoost, float* 
 
 // Revs the engine in neutral to the full boost rpm, holds full throttle for the given time, then
 // lifts for the given time and returns the boost
-static float RevBoost( const b3VehicleTurbo* turbo, float throttleTime, float liftTime )
+static float RevBoost( const b3WheeledVehicleTurbo* turbo, float throttleTime, float liftTime )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.turbo = *turbo;
-	def.transmission.mode = b3_vehicleTransmissionManual;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	def.transmission.mode = b3_wheeledVehicleTransmissionManual;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 60 );
-	b3Vehicle_SetGear( vehicleId, 0 );
+	b3WheeledVehicle_SetGear( wheeledVehicleId, 0 );
 	Step( worldId, 30 );
 
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
-	for ( int i = 0; i < 120 && b3Vehicle_GetState( vehicleId ).engineRpm < turbo->stages[0].fullBoostRpm; ++i )
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
+	for ( int i = 0; i < 120 && b3WheeledVehicle_GetState( wheeledVehicleId ).engineRpm < turbo->stages[0].fullBoostRpm; ++i )
 	{
 		Step( worldId, 1 );
 	}
 	Step( worldId, (int)( throttleTime / VEHICLE_DT + 0.5f ) );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .handbrake = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .handbrake = 1.0f } );
 	Step( worldId, (int)( liftTime / VEHICLE_DT + 0.5f ) );
-	float boost = b3Vehicle_GetState( vehicleId ).boost;
+	float boost = b3WheeledVehicle_GetState( wheeledVehicleId ).boost;
 
 	b3DestroyWorld( worldId );
 	return boost;
@@ -1619,20 +1619,20 @@ static float RevBoost( const b3VehicleTurbo* turbo, float throttleTime, float li
 
 // Revs the engine in neutral with the pedal held at the given position and returns the boost
 // after the given time
-static float NeutralBoost( const b3VehicleTurbo* turbo, float pedal, float time )
+static float NeutralBoost( const b3WheeledVehicleTurbo* turbo, float pedal, float time )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.turbo = *turbo;
-	def.transmission.mode = b3_vehicleTransmissionManual;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	def.transmission.mode = b3_wheeledVehicleTransmissionManual;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 60 );
-	b3Vehicle_SetGear( vehicleId, 0 );
+	b3WheeledVehicle_SetGear( wheeledVehicleId, 0 );
 	Step( worldId, 30 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = pedal } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = pedal } );
 	Step( worldId, (int)( time / VEHICLE_DT + 0.5f ) );
-	float boost = b3Vehicle_GetState( vehicleId ).boost;
+	float boost = b3WheeledVehicle_GetState( wheeledVehicleId ).boost;
 	b3DestroyWorld( worldId );
 	return boost;
 }
@@ -1640,48 +1640,48 @@ static float NeutralBoost( const b3VehicleTurbo* turbo, float pedal, float time 
 // Spools the turbo fully in neutral, eases the pedal below the boost gate for the given time so
 // the engine keeps revving with no boost asked for, then opens it again for one step. Returns
 // the boost while eased and after reopening.
-static void LiftAndReopen( const b3VehicleTurbo* turbo, float liftTime, float* eased, float* reopened )
+static void LiftAndReopen( const b3WheeledVehicleTurbo* turbo, float liftTime, float* eased, float* reopened )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.turbo = *turbo;
-	def.transmission.mode = b3_vehicleTransmissionManual;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	def.transmission.mode = b3_wheeledVehicleTransmissionManual;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 60 );
-	b3Vehicle_SetGear( vehicleId, 0 );
+	b3WheeledVehicle_SetGear( wheeledVehicleId, 0 );
 	Step( worldId, 30 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 180 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 0.5f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 0.5f } );
 	Step( worldId, (int)( liftTime / VEHICLE_DT + 0.5f ) );
-	*eased = b3Vehicle_GetState( vehicleId ).boost;
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	*eased = b3WheeledVehicle_GetState( wheeledVehicleId ).boost;
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 1 );
-	*reopened = b3Vehicle_GetState( vehicleId ).boost;
+	*reopened = b3WheeledVehicle_GetState( wheeledVehicleId ).boost;
 	b3DestroyWorld( worldId );
 }
 
 // Time from full throttle in neutral until the boost reaches 80% of the gain, for an engine with
 // the given rev limit
-static float SpoolTimeAt( const b3VehicleTurbo* turbo, float maxRpm )
+static float SpoolTimeAt( const b3WheeledVehicleTurbo* turbo, float maxRpm )
 {
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.turbo = *turbo;
 	def.engine.maxRpm = maxRpm;
-	def.transmission.mode = b3_vehicleTransmissionManual;
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	def.transmission.mode = b3_wheeledVehicleTransmissionManual;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 60 );
-	b3Vehicle_SetGear( vehicleId, 0 );
+	b3WheeledVehicle_SetGear( wheeledVehicleId, 0 );
 	Step( worldId, 30 );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	float time = -1.0f;
 	for ( int i = 0; i < 600; ++i )
 	{
 		Step( worldId, 1 );
-		if ( b3Vehicle_GetState( vehicleId ).boost >= 0.8f * turbo->stages[0].gain )
+		if ( b3WheeledVehicle_GetState( wheeledVehicleId ).boost >= 0.8f * turbo->stages[0].gain )
 		{
 			time = ( i + 1 ) * VEHICLE_DT;
 			break;
@@ -1694,7 +1694,7 @@ static float SpoolTimeAt( const b3VehicleTurbo* turbo, float maxRpm )
 static int TurboTest( void )
 {
 	// Naturally aspirated by default
-	b3VehicleDef def = b3DefaultVehicleDef();
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	ENSURE( def.turbo.stages[0].gain == 0.0f && def.turbo.stages[1].gain == 0.0f );
 	float naPeak, naMin;
 	float naTime = TurboLaunch( NULL, &naPeak, &naMin );
@@ -1703,7 +1703,7 @@ static int TurboTest( void )
 
 	// The same engine with a turbo is quicker, and its boost reaches the full gain. Traction control
 	// holds both cars to the tire grip in first gear, so the gain shows from second gear on.
-	b3VehicleTurbo turbo = SingleTurbo();
+	b3WheeledVehicleTurbo turbo = SingleTurbo();
 	float turboPeak, turboMin;
 	float turboTime = TurboLaunch( &turbo, &turboPeak, &turboMin );
 	printf( "    0-100 km/h: na %.2f s, turbo %.2f s, peak boost %.2f\n", naTime, turboTime, turboPeak );
@@ -1711,7 +1711,7 @@ static int TurboTest( void )
 	ENSURE( turboPeak > 0.45f && turboPeak <= 0.5f + 1e-4f );
 
 	// Shifts cut the throttle and the boost bleeds off. Anti-lag holds it through the shifts.
-	b3VehicleTurbo antiLag = turbo;
+	b3WheeledVehicleTurbo antiLag = turbo;
 	antiLag.antiLag = true;
 	float antiLagPeak, antiLagMin;
 	TurboLaunch( &antiLag, &antiLagPeak, &antiLagMin );
@@ -1723,7 +1723,7 @@ static int TurboTest( void )
 	// while a supercharger is there at once
 	float lagged = RevBoost( &turbo, 0.25f, 0.0f );
 	float spooled = RevBoost( &turbo, 2.0f, 0.0f );
-	b3VehicleTurbo supercharger = turbo;
+	b3WheeledVehicleTurbo supercharger = turbo;
 	supercharger.instantFraction = 1.0f;
 	float instant = RevBoost( &supercharger, 0.25f, 0.0f );
 	printf( "    boost after 0.25 s: turbo %.2f, supercharger %.2f, after 2 s turbo %.2f\n", lagged, instant, spooled );
@@ -1737,7 +1737,7 @@ static int TurboTest( void )
 
 	// but the shaft keeps spinning: with a long bleed time the boost is back the moment the pedal
 	// opens again after a short lift, with a short one the turbo has to spool up again
-	b3VehicleTurbo slowBleed = turbo;
+	b3WheeledVehicleTurbo slowBleed = turbo;
 	slowBleed.stages[0].bleedTime = 1.5f;
 	float easedSlow, reopenedSlow, easedFast, reopenedFast;
 	LiftAndReopen( &slowBleed, 0.3f, &easedSlow, &reopenedSlow );
@@ -1765,9 +1765,9 @@ static int TurboTest( void )
 	ENSURE( lowRev > 0.0f && highRev > 0.0f && highRev < 0.85f * lowRev );
 
 	// A sequential twin sums its stages
-	b3VehicleTurbo twin = turbo;
+	b3WheeledVehicleTurbo twin = turbo;
 	twin.stages[0].gain = 0.25f;
-	twin.stages[1] = (b3VehicleTurboStage){
+	twin.stages[1] = (b3WheeledVehicleTurboStage){
 		.gain = 0.25f, .spoolRpm = 4000.0f, .fullBoostRpm = 5000.0f, .spoolTime = 1.0f, .bleedTime = 0.2f
 	};
 	float twinPeak, twinMin;
@@ -1775,33 +1775,33 @@ static int TurboTest( void )
 	ENSURE( twinPeak > 0.45f && twinPeak <= 0.5f + 1e-4f );
 
 	// Live settings round-trip and are sanitized
-	b3WorldId worldId = CreateVehicleWorld( 1 );
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
-	b3VehicleId vehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
-	b3VehicleTurbo bad = turbo;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3WheeledVehicleTurbo bad = turbo;
 	bad.stages[0].fullBoostRpm = 1000.0f;
 	bad.stages[1].gain = NAN;
 	bad.instantFraction = 2.0f;
-	b3Vehicle_SetTurbo( vehicleId, bad );
-	b3VehicleTurbo got = b3Vehicle_GetTurbo( vehicleId );
+	b3WheeledVehicle_SetTurbo( wheeledVehicleId, bad );
+	b3WheeledVehicleTurbo got = b3WheeledVehicle_GetTurbo( wheeledVehicleId );
 	ENSURE( got.stages[0].gain == 0.5f );
 	ENSURE( got.stages[0].fullBoostRpm == got.stages[0].spoolRpm );
 	ENSURE( got.stages[1].gain == 0.0f );
 	ENSURE( got.instantFraction == 1.0f );
-	b3Vehicle_SetInput( vehicleId, (b3VehicleInput){ .forward = 1.0f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
 	Step( worldId, 120 );
-	ENSURE( b3Vehicle_GetState( vehicleId ).boost > 0.0f );
-	ENSURE( VehicleIsFinite( vehicleId ) );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).boost > 0.0f );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	// Reset clears the boost
-	b3Vehicle_Reset( vehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
-	ENSURE( b3Vehicle_GetState( vehicleId ).boost == 0.0f );
+	b3WheeledVehicle_Reset( wheeledVehicleId, (b3Pos){ 0.0f, 0.6f, 0.0f }, b3Quat_identity );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).boost == 0.0f );
 
 	b3DestroyWorld( worldId );
 	return 0;
 }
 
-int VehicleTest( void )
+int WheeledVehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
 	RUN_SUBTEST( AccelerationTest );
