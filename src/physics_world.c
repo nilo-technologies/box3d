@@ -306,8 +306,8 @@ b3WorldId b3CreateWorld( const b3WorldDef* def )
 	world->jointIdPool = b3CreateIdPool();
 	b3Array_Reserve( world->joints, 16 );
 
-	world->vehicleIdPool = b3CreateIdPool();
-	world->vehicleAnchorId = b3_nullBodyId;
+	world->wheeledVehicleIdPool = b3CreateIdPool();
+	world->wheeledVehicleAnchorId = b3_nullBodyId;
 
 	world->islandIdPool = b3CreateIdPool();
 	b3Array_Reserve( world->islands, b3MaxInt( 16, def->capacity.dynamicBodyCount ) );
@@ -525,7 +525,7 @@ void b3DestroyWorld( b3WorldId worldId )
 	b3DestroyIdPool( &world->shapeIdPool );
 	b3DestroyIdPool( &world->contactIdPool );
 	b3DestroyIdPool( &world->jointIdPool );
-	b3DestroyIdPool( &world->vehicleIdPool );
+	b3DestroyIdPool( &world->wheeledVehicleIdPool );
 	b3DestroyIdPool( &world->islandIdPool );
 	b3DestroyIdPool( &world->solverSetIdPool );
 
@@ -1053,7 +1053,7 @@ void b3World_Step( b3WorldId worldId, float timeStep, int subStepCount )
 	B3_REC( world, Step, worldId, timeStep, subStepCount );
 
 	// Wheel casts and joint updates need an unlocked world
-	b3UpdateVehiclesPreStep( world, timeStep );
+	b3UpdateWheeledVehiclesPreStep( world, timeStep );
 
 	world->locked = true;
 
@@ -2340,9 +2340,9 @@ void b3World_StartRecording( b3WorldId worldId, b3Recording* recording )
 		return;
 	}
 
-	// Vehicles are not recorded
-	B3_ASSERT( b3GetIdCount( &world->vehicleIdPool ) == 0 );
-	if ( b3GetIdCount( &world->vehicleIdPool ) > 0 )
+	// WheeledVehicles are not recorded
+	B3_ASSERT( b3GetIdCount( &world->wheeledVehicleIdPool ) == 0 );
+	if ( b3GetIdCount( &world->wheeledVehicleIdPool ) > 0 )
 	{
 		return;
 	}
@@ -2372,9 +2372,9 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 	int contactIdBytes = b3GetIdBytes( &world->contactIdPool );
 	int islandIdBytes = b3GetIdBytes( &world->islandIdPool );
 	int shapeIdBytes = b3GetIdBytes( &world->shapeIdPool );
-	int vehicleIdBytes = b3GetIdBytes( &world->vehicleIdPool );
+	int wheeledVehicleIdBytes = b3GetIdBytes( &world->wheeledVehicleIdPool );
 	total += (uint64_t)bodyIdBytes + solverSetIdBytes + jointIdBytes + contactIdBytes + islandIdBytes + shapeIdBytes +
-			 vehicleIdBytes;
+			 wheeledVehicleIdBytes;
 
 	if ( log )
 	{
@@ -2385,7 +2385,7 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 		b3Log( "contact ids: %d", contactIdBytes );
 		b3Log( "island ids: %d", islandIdBytes );
 		b3Log( "shape ids: %d", shapeIdBytes );
-		b3Log( "vehicle ids: %d", vehicleIdBytes );
+		b3Log( "vehicle ids: %d", wheeledVehicleIdBytes );
 	}
 
 	// Islands own per-island body/contact/joint link arrays
@@ -2406,9 +2406,9 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 	int islandArrayBytes = b3Array_ByteCount( world->islands );
 	int shapeArrayBytes = b3Array_ByteCount( world->shapes );
 	int sensorArrayBytes = b3Array_ByteCount( world->sensors );
-	int vehicleArrayBytes = b3Array_ByteCount( world->vehicles );
+	int wheeledVehicleArrayBytes = b3Array_ByteCount( world->vehicles );
 	total += (uint64_t)bodyArrayBytes + solverSetArrayBytes + jointArrayBytes + contactArrayBytes + islandArrayBytes +
-			 islandLinkBytes + shapeArrayBytes + sensorArrayBytes + vehicleArrayBytes;
+			 islandLinkBytes + shapeArrayBytes + sensorArrayBytes + wheeledVehicleArrayBytes;
 
 	if ( log )
 	{
@@ -2421,7 +2421,7 @@ static uint64_t b3GetWorldByteCount( b3World* world, bool log )
 		b3Log( "island links: %d", islandLinkBytes );
 		b3Log( "shapes: %d", shapeArrayBytes );
 		b3Log( "sensors: %d", sensorArrayBytes );
-		b3Log( "vehicles: %d", vehicleArrayBytes );
+		b3Log( "vehicles: %d", wheeledVehicleArrayBytes );
 	}
 
 	// Sensors own overlap tracking arrays. The sensor array is dense.

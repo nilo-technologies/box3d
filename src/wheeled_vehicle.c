@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Nilo Technologies
 // SPDX-License-Identifier: MIT
 
-#include "vehicle.h"
+#include "wheeled_vehicle.h"
 
 #include "body.h"
 #include "core.h"
@@ -54,9 +54,9 @@ static float b3DegToRad( float degrees )
 	return degrees * ( B3_PI / 180.0f );
 }
 
-b3VehicleWheelDef b3DefaultVehicleWheelDef( void )
+b3WheeledVehicleWheelDef b3DefaultWheeledVehicleWheelDef( void )
 {
-	b3VehicleWheelDef def = { 0 };
+	b3WheeledVehicleWheelDef def = { 0 };
 	def.radius = 0.34f;
 	def.width = 0.22f;
 	def.inertia = 1.1f;
@@ -64,7 +64,7 @@ b3VehicleWheelDef b3DefaultVehicleWheelDef( void )
 	def.maxBrakeTorque = 1500.0f;
 	def.maxHandBrakeTorque = 0.0f;
 	def.angularDamping = 0.2f;
-	def.castType = b3_vehicleCastCylinder;
+	def.castType = b3_wheeledVehicleCastCylinder;
 
 	def.suspension.minLength = 0.2f;
 	def.suspension.maxLength = 0.4f;
@@ -87,9 +87,9 @@ b3VehicleWheelDef b3DefaultVehicleWheelDef( void )
 	return def;
 }
 
-b3VehicleDef b3DefaultVehicleDef( void )
+b3WheeledVehicleDef b3DefaultWheeledVehicleDef( void )
 {
-	b3VehicleDef def = { 0 };
+	b3WheeledVehicleDef def = { 0 };
 
 	def.chassis.mass = 1300.0f;
 	def.chassis.autoCenterOfMass = true;
@@ -110,8 +110,8 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	def.wheelCount = 4;
 	for ( int i = 0; i < 4; ++i )
 	{
-		b3VehicleWheelDef* wheel = def.wheels + i;
-		*wheel = b3DefaultVehicleWheelDef();
+		b3WheeledVehicleWheelDef* wheel = def.wheels + i;
+		*wheel = b3DefaultWheeledVehicleWheelDef();
 		wheel->position = positions[i];
 
 		bool front = i < 2;
@@ -130,7 +130,7 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	def.engine.inertia = 0.3f;
 	def.engine.angularDamping = 0.08f;
 
-	def.transmission.mode = b3_vehicleTransmissionAuto;
+	def.transmission.mode = b3_wheeledVehicleTransmissionAuto;
 	float ratios[6] = { 3.3f, 2.1f, 1.5f, 1.15f, 0.92f, 0.78f };
 	for ( int i = 0; i < 6; ++i )
 	{
@@ -147,7 +147,7 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	def.transmission.clutchStrength = 10.0f;
 
 	def.drivetrain.differentialCount = 1;
-	def.drivetrain.differentials[0] = (b3VehicleDifferential){
+	def.drivetrain.differentials[0] = (b3WheeledVehicleDifferential){
 		.leftWheel = 2,
 		.rightWheel = 3,
 		.torqueRatio = 1.0f,
@@ -156,16 +156,16 @@ b3VehicleDef b3DefaultVehicleDef( void )
 	};
 	for ( int i = 1; i < B3_MAX_VEHICLE_DIFFERENTIALS; ++i )
 	{
-		def.drivetrain.differentials[i] = (b3VehicleDifferential){ -1, -1, 0.0f, 0.5f, 1.0f };
+		def.drivetrain.differentials[i] = (b3WheeledVehicleDifferential){ -1, -1, 0.0f, 0.5f, 1.0f };
 	}
 	def.drivetrain.centerLimitedSlipRatio = 1.4f;
 
 	def.antiRoll.barCount = 2;
-	def.antiRoll.bars[0] = (b3VehicleAntiRollBar){ 0, 1, 25000.0f };
-	def.antiRoll.bars[1] = (b3VehicleAntiRollBar){ 2, 3, 15000.0f };
+	def.antiRoll.bars[0] = (b3WheeledVehicleAntiRollBar){ 0, 1, 25000.0f };
+	def.antiRoll.bars[1] = (b3WheeledVehicleAntiRollBar){ 2, 3, 15000.0f };
 	for ( int i = 2; i < B3_MAX_VEHICLE_ANTI_ROLL_BARS; ++i )
 	{
-		def.antiRoll.bars[i] = (b3VehicleAntiRollBar){ -1, -1, 0.0f };
+		def.antiRoll.bars[i] = (b3WheeledVehicleAntiRollBar){ -1, -1, 0.0f };
 	}
 
 	def.steering.maxAngle = b3DegToRad( 35.0f );
@@ -205,7 +205,7 @@ static float b3SanitizeFloat( float value, float lower, float upper, float fallb
 	return b3ClampFloat( value, lower, upper );
 }
 
-static b3VehicleChassis b3SanitizeChassis( b3VehicleChassis c )
+static b3WheeledVehicleChassis b3SanitizeChassis( b3WheeledVehicleChassis c )
 {
 	c.mass = b3SanitizeFloat( c.mass, 0.0f, FLT_MAX, 0.0f );
 	if ( b3IsValidVec3( c.centerOfMassOffset ) == false )
@@ -223,7 +223,7 @@ static b3VehicleChassis b3SanitizeChassis( b3VehicleChassis c )
 	return c;
 }
 
-static b3VehicleWheelDef b3SanitizeWheel( b3VehicleWheelDef w )
+static b3WheeledVehicleWheelDef b3SanitizeWheel( b3WheeledVehicleWheelDef w )
 {
 	if ( b3IsValidVec3( w.position ) == false )
 	{
@@ -237,12 +237,12 @@ static b3VehicleWheelDef b3SanitizeWheel( b3VehicleWheelDef w )
 	w.maxBrakeTorque = b3SanitizeFloat( w.maxBrakeTorque, 0.0f, FLT_MAX, 0.0f );
 	w.maxHandBrakeTorque = b3SanitizeFloat( w.maxHandBrakeTorque, 0.0f, FLT_MAX, 0.0f );
 	w.angularDamping = b3SanitizeFloat( w.angularDamping, 0.0f, FLT_MAX, 0.0f );
-	if ( w.castType < b3_vehicleCastCylinder || w.castType > b3_vehicleCastRay )
+	if ( w.castType < b3_wheeledVehicleCastCylinder || w.castType > b3_wheeledVehicleCastRay )
 	{
-		w.castType = b3_vehicleCastCylinder;
+		w.castType = b3_wheeledVehicleCastCylinder;
 	}
 
-	b3VehicleSuspension* s = &w.suspension;
+	b3WheeledVehicleSuspension* s = &w.suspension;
 	s->maxLength = b3SanitizeFloat( s->maxLength, 0.0f, 100.0f, 0.4f );
 	s->minLength = b3SanitizeFloat( s->minLength, 0.0f, s->maxLength, 0.0f );
 	s->preload = b3SanitizeFloat( s->preload, -s->maxLength, 100.0f, 0.0f );
@@ -250,7 +250,7 @@ static b3VehicleWheelDef b3SanitizeWheel( b3VehicleWheelDef w )
 	s->compressionDamping = b3SanitizeFloat( s->compressionDamping, 0.0f, 100.0f, 0.0f );
 	s->reboundDamping = b3SanitizeFloat( s->reboundDamping, 0.0f, 100.0f, 0.0f );
 
-	b3VehicleTire* t = &w.tire;
+	b3WheeledVehicleTire* t = &w.tire;
 	t->longitudinalPeakSlip = b3SanitizeFloat( t->longitudinalPeakSlip, 1e-3f, 100.0f, 0.1f );
 	t->longitudinalSlideSlip =
 		b3SanitizeFloat( t->longitudinalSlideSlip, t->longitudinalPeakSlip, 100.0f, t->longitudinalPeakSlip );
@@ -265,7 +265,7 @@ static b3VehicleWheelDef b3SanitizeWheel( b3VehicleWheelDef w )
 	return w;
 }
 
-static b3VehicleEngine b3SanitizeEngine( b3VehicleEngine e )
+static b3WheeledVehicleEngine b3SanitizeEngine( b3WheeledVehicleEngine e )
 {
 	e.maxTorque = b3SanitizeFloat( e.maxTorque, 0.0f, FLT_MAX, 0.0f );
 	e.idleRpm = b3SanitizeFloat( e.idleRpm, 0.0f, 1e6f, 900.0f );
@@ -278,11 +278,11 @@ static b3VehicleEngine b3SanitizeEngine( b3VehicleEngine e )
 	return e;
 }
 
-static b3VehicleTurbo b3SanitizeTurbo( b3VehicleTurbo t )
+static b3WheeledVehicleTurbo b3SanitizeTurbo( b3WheeledVehicleTurbo t )
 {
 	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
 	{
-		b3VehicleTurboStage* s = t.stages + i;
+		b3WheeledVehicleTurboStage* s = t.stages + i;
 		s->gain = b3SanitizeFloat( s->gain, 0.0f, 10.0f, 0.0f );
 		s->spoolRpm = b3SanitizeFloat( s->spoolRpm, 0.0f, 1e6f, 0.0f );
 		s->fullBoostRpm = b3SanitizeFloat( s->fullBoostRpm, s->spoolRpm, 1e6f, s->spoolRpm );
@@ -295,11 +295,11 @@ static b3VehicleTurbo b3SanitizeTurbo( b3VehicleTurbo t )
 	return t;
 }
 
-static b3VehicleTransmission b3SanitizeTransmission( b3VehicleTransmission t )
+static b3WheeledVehicleTransmission b3SanitizeTransmission( b3WheeledVehicleTransmission t )
 {
-	if ( t.mode != b3_vehicleTransmissionAuto && t.mode != b3_vehicleTransmissionManual )
+	if ( t.mode != b3_wheeledVehicleTransmissionAuto && t.mode != b3_wheeledVehicleTransmissionManual )
 	{
-		t.mode = b3_vehicleTransmissionAuto;
+		t.mode = b3_wheeledVehicleTransmissionAuto;
 	}
 
 	t.gearCount = b3ClampInt( t.gearCount, 1, B3_MAX_VEHICLE_GEARS );
@@ -324,12 +324,12 @@ static int b3SanitizeWheelIndex( int index, int wheelCount )
 	return 0 <= index && index < wheelCount ? index : -1;
 }
 
-static b3VehicleDrivetrain b3SanitizeDrivetrain( b3VehicleDrivetrain d, int wheelCount )
+static b3WheeledVehicleDrivetrain b3SanitizeDrivetrain( b3WheeledVehicleDrivetrain d, int wheelCount )
 {
 	d.differentialCount = b3ClampInt( d.differentialCount, 0, B3_MAX_VEHICLE_DIFFERENTIALS );
 	for ( int i = 0; i < B3_MAX_VEHICLE_DIFFERENTIALS; ++i )
 	{
-		b3VehicleDifferential* diff = d.differentials + i;
+		b3WheeledVehicleDifferential* diff = d.differentials + i;
 		diff->leftWheel = b3SanitizeWheelIndex( diff->leftWheel, wheelCount );
 		diff->rightWheel = b3SanitizeWheelIndex( diff->rightWheel, wheelCount );
 		diff->torqueRatio = b3SanitizeFloat( diff->torqueRatio, 0.0f, 1.0f, 0.0f );
@@ -341,12 +341,12 @@ static b3VehicleDrivetrain b3SanitizeDrivetrain( b3VehicleDrivetrain d, int whee
 	return d;
 }
 
-static b3VehicleAntiRoll b3SanitizeAntiRoll( b3VehicleAntiRoll a, int wheelCount )
+static b3WheeledVehicleAntiRoll b3SanitizeAntiRoll( b3WheeledVehicleAntiRoll a, int wheelCount )
 {
 	a.barCount = b3ClampInt( a.barCount, 0, B3_MAX_VEHICLE_ANTI_ROLL_BARS );
 	for ( int i = 0; i < B3_MAX_VEHICLE_ANTI_ROLL_BARS; ++i )
 	{
-		b3VehicleAntiRollBar* bar = a.bars + i;
+		b3WheeledVehicleAntiRollBar* bar = a.bars + i;
 		bar->leftWheel = b3SanitizeWheelIndex( bar->leftWheel, wheelCount );
 		bar->rightWheel = b3SanitizeWheelIndex( bar->rightWheel, wheelCount );
 		bar->stiffness = b3SanitizeFloat( bar->stiffness, 0.0f, FLT_MAX, 0.0f );
@@ -354,7 +354,7 @@ static b3VehicleAntiRoll b3SanitizeAntiRoll( b3VehicleAntiRoll a, int wheelCount
 	return a;
 }
 
-static b3VehicleSteering b3SanitizeSteering( b3VehicleSteering s )
+static b3WheeledVehicleSteering b3SanitizeSteering( b3WheeledVehicleSteering s )
 {
 	s.maxAngle = b3SanitizeFloat( s.maxAngle, 0.0f, 0.5f * B3_PI, 0.0f );
 	s.speedReference = b3SanitizeFloat( s.speedReference, 0.0f, FLT_MAX, 0.0f );
@@ -364,7 +364,7 @@ static b3VehicleSteering b3SanitizeSteering( b3VehicleSteering s )
 	return s;
 }
 
-static b3VehicleAssists b3SanitizeAssists( b3VehicleAssists a )
+static b3WheeledVehicleAssists b3SanitizeAssists( b3WheeledVehicleAssists a )
 {
 	a.counterSteer = b3SanitizeFloat( a.counterSteer, 0.0f, 10.0f, 0.0f );
 	a.driftGripScale = b3SanitizeFloat( a.driftGripScale, 0.0f, 10.0f, 1.0f );
@@ -380,23 +380,23 @@ static b3VehicleAssists b3SanitizeAssists( b3VehicleAssists a )
 	return a;
 }
 
-static b3Vehicle* b3GetVehicleFullId( b3World* world, b3VehicleId vehicleId )
+static b3WheeledVehicle* b3GetWheeledVehicleFullId( b3World* world, b3WheeledVehicleId wheeledVehicleId )
 {
-	int id = vehicleId.index1 - 1;
-	b3Vehicle* vehicle = b3Array_Get( world->vehicles, id );
-	B3_ASSERT( vehicle->id == id && vehicle->generation == vehicleId.generation );
+	int id = wheeledVehicleId.index1 - 1;
+	b3WheeledVehicle* vehicle = b3Array_Get( world->vehicles, id );
+	B3_ASSERT( vehicle->id == id && vehicle->generation == wheeledVehicleId.generation );
 	return vehicle;
 }
 
-static b3Vehicle* b3GetVehicle( b3VehicleId vehicleId )
+static b3WheeledVehicle* b3GetWheeledVehicle( b3WheeledVehicleId wheeledVehicleId )
 {
-	b3World* world = b3GetWorld( vehicleId.world0 );
-	return b3GetVehicleFullId( world, vehicleId );
+	b3World* world = b3GetWorld( wheeledVehicleId.world0 );
+	return b3GetWheeledVehicleFullId( world, wheeledVehicleId );
 }
 
-static b3World* b3GetVehicleWorld( b3VehicleId vehicleId )
+static b3World* b3GetWheeledVehicleWorld( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetWorld( vehicleId.world0 );
+	return b3GetWorld( wheeledVehicleId.world0 );
 }
 
 static bool b3IsJointIdValidInternal( b3World* world, b3JointId jointId )
@@ -408,7 +408,7 @@ static bool b3IsJointIdValidInternal( b3World* world, b3JointId jointId )
 
 	b3Joint* joint = world->joints.data + ( jointId.index1 - 1 );
 	return joint->jointId == jointId.index1 - 1 && joint->generation == jointId.generation &&
-		   joint->type == b3_vehicleWheelJoint;
+		   joint->type == b3_wheeledVehicleWheelJoint;
 }
 
 static bool b3IsBodyIdValidInternal( b3World* world, b3BodyId bodyId )
@@ -422,19 +422,19 @@ static bool b3IsBodyIdValidInternal( b3World* world, b3BodyId bodyId )
 	return body->id == bodyId.index1 - 1 && body->generation == bodyId.generation;
 }
 
-static b3BodyId b3GetVehicleAnchor( b3World* world )
+static b3BodyId b3GetWheeledVehicleAnchor( b3World* world )
 {
-	if ( b3IsBodyIdValidInternal( world, world->vehicleAnchorId ) )
+	if ( b3IsBodyIdValidInternal( world, world->wheeledVehicleAnchorId ) )
 	{
-		return world->vehicleAnchorId;
+		return world->wheeledVehicleAnchorId;
 	}
 
 	b3BodyDef bodyDef = b3DefaultBodyDef();
 	bodyDef.type = b3_staticBody;
 	bodyDef.name = "vehicle anchor";
 	b3WorldId worldId = { (uint16_t)( world->worldId + 1 ), world->generation };
-	world->vehicleAnchorId = b3CreateBody( worldId, &bodyDef );
-	return world->vehicleAnchorId;
+	world->wheeledVehicleAnchorId = b3CreateBody( worldId, &bodyDef );
+	return world->wheeledVehicleAnchorId;
 }
 
 static float b3GravityLength( b3World* world )
@@ -443,9 +443,9 @@ static float b3GravityLength( b3World* world )
 	return g > 0.0f ? g : 9.81f;
 }
 
-static float b3RestLength( const b3VehicleWheelDef* wheel, float gravity )
+static float b3RestLength( const b3WheeledVehicleWheelDef* wheel, float gravity )
 {
-	const b3VehicleSuspension* s = &wheel->suspension;
+	const b3WheeledVehicleSuspension* s = &wheel->suspension;
 	float omega = 2.0f * B3_PI * s->frequency;
 	float compression = omega > 0.0f ? gravity / ( omega * omega ) : s->maxLength - s->minLength;
 	return b3ClampFloat( s->maxLength + s->preload - compression, s->minLength, s->maxLength );
@@ -453,7 +453,7 @@ static float b3RestLength( const b3VehicleWheelDef* wheel, float gravity )
 
 // Sprung masses from the center of mass and the wheel layout. Solves for the masses that
 // balance the chassis weight and moments with the smallest variation (PhysX style).
-static void b3ComputeSprungMasses( b3World* world, b3Vehicle* v )
+static void b3ComputeSprungMasses( b3World* world, b3WheeledVehicle* v )
 {
 	int n = v->wheelCount;
 	float mass = b3Body_GetMass( v->chassisId );
@@ -513,8 +513,8 @@ static void b3ComputeSprungMasses( b3World* world, b3Vehicle* v )
 	B3_UNUSED( world );
 	for ( int i = 0; i < n; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
-		const b3VehicleSuspension* s = &wheel->def.suspension;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
+		const b3WheeledVehicleSuspension* s = &wheel->def.suspension;
 		float m = total > 0.0f ? sprung[i] * mass / total : 0.0f;
 		float omega = 2.0f * B3_PI * s->frequency;
 		wheel->sprungMass = m;
@@ -524,7 +524,7 @@ static void b3ComputeSprungMasses( b3World* world, b3Vehicle* v )
 	}
 }
 
-static void b3ApplyVehicleMass( b3World* world, b3Vehicle* v )
+static void b3ApplyWheeledVehicleMass( b3World* world, b3WheeledVehicle* v )
 {
 	b3MassData massData;
 	massData.mass = v->chassis.mass > 0.0f ? v->chassis.mass : v->baseMass;
@@ -539,7 +539,7 @@ static void b3ApplyVehicleMass( b3World* world, b3Vehicle* v )
 		float height = 0.0f;
 		for ( int i = 0; i < v->wheelCount; ++i )
 		{
-			const b3VehicleWheelDef* wheel = &v->wheels[i].def;
+			const b3WheeledVehicleWheelDef* wheel = &v->wheels[i].def;
 			height += b3Dot( wheel->position, up ) - b3RestLength( wheel, g );
 		}
 		height /= v->wheelCount;
@@ -557,21 +557,21 @@ static void b3ApplyVehicleMass( b3World* world, b3Vehicle* v )
 	v->massDirty = false;
 }
 
-b3VehicleId b3CreateVehicle( b3WorldId worldId, const b3VehicleDef* def )
+b3WheeledVehicleId b3CreateWheeledVehicle( b3WorldId worldId, const b3WheeledVehicleDef* def )
 {
 	B3_CHECK_DEF( def );
 
 	b3World* world = b3GetUnlockedWorldFromId( worldId );
 	if ( world == NULL )
 	{
-		return b3_nullVehicleId;
+		return b3_nullWheeledVehicleId;
 	}
 
-	// Vehicles run outside the recorded op stream
+	// WheeledVehicles run outside the recorded op stream
 	B3_ASSERT( world->recording == NULL );
 	if ( world->recording != NULL )
 	{
-		return b3_nullVehicleId;
+		return b3_nullWheeledVehicleId;
 	}
 
 	B3_ASSERT( b3Body_IsValid( def->chassisId ) );
@@ -579,20 +579,20 @@ b3VehicleId b3CreateVehicle( b3WorldId worldId, const b3VehicleDef* def )
 	B3_ASSERT( 0 < def->wheelCount && def->wheelCount <= B3_MAX_VEHICLE_WHEELS );
 	if ( b3Body_IsValid( def->chassisId ) == false || def->wheelCount <= 0 )
 	{
-		return b3_nullVehicleId;
+		return b3_nullWheeledVehicleId;
 	}
 
-	b3BodyId anchorId = b3GetVehicleAnchor( world );
+	b3BodyId anchorId = b3GetWheeledVehicleAnchor( world );
 
-	int id = b3AllocId( &world->vehicleIdPool );
+	int id = b3AllocId( &world->wheeledVehicleIdPool );
 	if ( id == world->vehicles.count )
 	{
-		b3Array_Push( world->vehicles, (b3Vehicle){ 0 } );
+		b3Array_Push( world->vehicles, (b3WheeledVehicle){ 0 } );
 	}
 
-	b3Vehicle* v = b3Array_Get( world->vehicles, id );
+	b3WheeledVehicle* v = b3Array_Get( world->vehicles, id );
 	uint16_t generation = v->generation;
-	*v = (b3Vehicle){ 0 };
+	*v = (b3WheeledVehicle){ 0 };
 	v->id = id;
 	v->generation = generation + 1;
 	v->chassisId = def->chassisId;
@@ -602,11 +602,11 @@ b3VehicleId b3CreateVehicle( b3WorldId worldId, const b3VehicleDef* def )
 	v->chassis = b3SanitizeChassis( def->chassis );
 	for ( int i = 0; i < v->wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
 		wheel->def = b3SanitizeWheel( def->wheels[i] );
 		wheel->suspensionLength = wheel->def.suspension.maxLength;
 		wheel->groundBodyId = anchorId;
-		wheel->jointId = b3CreateVehicleWheelJointInternal( world, v->chassisId, anchorId );
+		wheel->jointId = b3CreateWheeledVehicleWheelJointInternal( world, v->chassisId, anchorId );
 	}
 
 	v->engine = b3SanitizeEngine( def->engine );
@@ -625,12 +625,12 @@ b3VehicleId b3CreateVehicle( b3WorldId worldId, const b3VehicleDef* def )
 	v->engineSpeed = v->engine.idleRpm * B3_RPM_TO_RADIANS;
 	v->gear = 1;
 
-	b3ApplyVehicleMass( world, v );
+	b3ApplyWheeledVehicleMass( world, v );
 
-	return (b3VehicleId){ id + 1, world->worldId, v->generation };
+	return (b3WheeledVehicleId){ id + 1, world->worldId, v->generation };
 }
 
-static void b3DestroyVehicleInternal( b3World* world, b3Vehicle* v )
+static void b3DestroyWheeledVehicleInternal( b3World* world, b3WheeledVehicle* v )
 {
 	for ( int i = 0; i < v->wheelCount; ++i )
 	{
@@ -642,40 +642,40 @@ static void b3DestroyVehicleInternal( b3World* world, b3Vehicle* v )
 		}
 	}
 
-	b3FreeId( &world->vehicleIdPool, v->id );
+	b3FreeId( &world->wheeledVehicleIdPool, v->id );
 	v->id = B3_NULL_INDEX;
 }
 
-void b3DestroyVehicle( b3VehicleId vehicleId )
+void b3DestroyWheeledVehicle( b3WheeledVehicleId wheeledVehicleId )
 {
-	b3World* world = b3GetUnlockedWorld( vehicleId.world0 );
+	b3World* world = b3GetUnlockedWorld( wheeledVehicleId.world0 );
 	if ( world == NULL )
 	{
 		return;
 	}
 
-	b3Vehicle* v = b3GetVehicleFullId( world, vehicleId );
-	b3DestroyVehicleInternal( world, v );
+	b3WheeledVehicle* v = b3GetWheeledVehicleFullId( world, wheeledVehicleId );
+	b3DestroyWheeledVehicleInternal( world, v );
 }
 
-void b3DestroyVehiclesOnBody( b3World* world, b3BodyId bodyId )
+void b3DestroyWheeledVehiclesOnBody( b3World* world, b3BodyId bodyId )
 {
-	if ( B3_ID_EQUALS( bodyId, world->vehicleAnchorId ) )
+	if ( B3_ID_EQUALS( bodyId, world->wheeledVehicleAnchorId ) )
 	{
-		world->vehicleAnchorId = b3_nullBodyId;
+		world->wheeledVehicleAnchorId = b3_nullBodyId;
 	}
 
 	for ( int i = 0; i < world->vehicles.count; ++i )
 	{
-		b3Vehicle* v = world->vehicles.data + i;
+		b3WheeledVehicle* v = world->vehicles.data + i;
 		if ( v->id != B3_NULL_INDEX && v->generation != 0 && B3_ID_EQUALS( v->chassisId, bodyId ) )
 		{
-			b3DestroyVehicleInternal( world, v );
+			b3DestroyWheeledVehicleInternal( world, v );
 		}
 	}
 }
 
-bool b3Vehicle_IsValid( b3VehicleId id )
+bool b3WheeledVehicle_IsValid( b3WheeledVehicleId id )
 {
 	if ( B3_MAX_WORLDS <= id.world0 )
 	{
@@ -693,34 +693,34 @@ bool b3Vehicle_IsValid( b3VehicleId id )
 		return false;
 	}
 
-	b3Vehicle* v = world->vehicles.data + ( id.index1 - 1 );
+	b3WheeledVehicle* v = world->vehicles.data + ( id.index1 - 1 );
 	return v->id == id.index1 - 1 && v->generation == id.generation;
 }
 
-int b3World_GetVehicleCount( b3WorldId worldId )
+int b3World_GetWheeledVehicleCount( b3WorldId worldId )
 {
 	b3World* world = b3GetWorldFromId( worldId );
-	return b3GetIdCount( &world->vehicleIdPool );
+	return b3GetIdCount( &world->wheeledVehicleIdPool );
 }
 
-b3BodyId b3Vehicle_GetChassisBody( b3VehicleId vehicleId )
+b3BodyId b3WheeledVehicle_GetChassisBody( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->chassisId;
+	return b3GetWheeledVehicle( wheeledVehicleId )->chassisId;
 }
 
-int b3Vehicle_GetWheelCount( b3VehicleId vehicleId )
+int b3WheeledVehicle_GetWheelCount( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->wheelCount;
+	return b3GetWheeledVehicle( wheeledVehicleId )->wheelCount;
 }
 
-static void b3WakeVehicle( b3Vehicle* v )
+static void b3WakeWheeledVehicle( b3WheeledVehicle* v )
 {
 	b3Body_SetAwake( v->chassisId, true );
 }
 
-void b3Vehicle_SetInput( b3VehicleId vehicleId, b3VehicleInput input )
+void b3WheeledVehicle_SetInput( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleInput input )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	input.forward = b3SanitizeFloat( input.forward, -1.0f, 1.0f, 0.0f );
 	input.brake = b3SanitizeFloat( input.brake, 0.0f, 1.0f, 0.0f );
 	input.steer = b3SanitizeFloat( input.steer, -1.0f, 1.0f, 0.0f );
@@ -729,21 +729,21 @@ void b3Vehicle_SetInput( b3VehicleId vehicleId, b3VehicleInput input )
 
 	if ( input.forward != 0.0f || input.brake != 0.0f || input.steer != 0.0f || input.handbrake != 0.0f )
 	{
-		b3World* world = b3GetVehicleWorld( vehicleId );
+		b3World* world = b3GetWheeledVehicleWorld( wheeledVehicleId );
 		if ( world->locked == false )
 		{
-			b3WakeVehicle( v );
+			b3WakeWheeledVehicle( v );
 		}
 	}
 }
 
-b3VehicleInput b3Vehicle_GetInput( b3VehicleId vehicleId )
+b3WheeledVehicleInput b3WheeledVehicle_GetInput( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->input;
+	return b3GetWheeledVehicle( wheeledVehicleId )->input;
 }
 
 // Fully extended with no ground, so the readouts never report a stale contact
-static void b3ClearWheelContact( b3VehicleWheel* wheel )
+static void b3ClearWheelContact( b3WheeledVehicleWheel* wheel )
 {
 	wheel->hasContact = false;
 	wheel->suspensionLength = wheel->def.suspension.maxLength;
@@ -753,7 +753,7 @@ static void b3ClearWheelContact( b3VehicleWheel* wheel )
 	wheel->userMaterialId = 0;
 }
 
-static void b3ShiftTo( b3Vehicle* v, int gear )
+static void b3ShiftTo( b3WheeledVehicle* v, int gear )
 {
 	if ( v->gear == gear )
 	{
@@ -766,36 +766,36 @@ static void b3ShiftTo( b3Vehicle* v, int gear )
 	v->latencyTimer = v->transmission.shiftLatency;
 }
 
-void b3Vehicle_SetGear( b3VehicleId vehicleId, int gear )
+void b3WheeledVehicle_SetGear( b3WheeledVehicleId wheeledVehicleId, int gear )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	b3ShiftTo( v, b3ClampInt( gear, -1, v->transmission.gearCount ) );
 }
 
-void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
+void b3WheeledVehicle_Reset( b3WheeledVehicleId wheeledVehicleId, b3Pos position, b3Quat rotation )
 {
-	b3World* world = b3GetUnlockedWorld( vehicleId.world0 );
+	b3World* world = b3GetUnlockedWorld( wheeledVehicleId.world0 );
 	if ( world == NULL )
 	{
 		return;
 	}
 
-	b3Vehicle* v = b3GetVehicleFullId( world, vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicleFullId( world, wheeledVehicleId );
 	b3Body_SetTransform( v->chassisId, position, rotation );
 	b3Body_SetLinearVelocity( v->chassisId, b3Vec3_zero );
 	b3Body_SetAngularVelocity( v->chassisId, b3Vec3_zero );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 
 	for ( int i = 0; i < v->wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
 		wheel->omega = 0.0f;
 		wheel->stickyTimer = 0.0f;
 		b3ClearWheelContact( wheel );
 		if ( b3IsJointIdValidInternal( world, wheel->jointId ) )
 		{
 			b3Joint* joint = b3GetJointFullId( world, wheel->jointId );
-			b3VehicleWheelJoint* sim = &b3GetJointSim( world, joint )->vehicleWheelJoint;
+			b3WheeledVehicleWheelJoint* sim = &b3GetJointSim( world, joint )->wheeledVehicleWheelJoint;
 			sim->omega = 0.0f;
 			sim->springImpulse = 0.0f;
 			sim->bumpImpulse = 0.0f;
@@ -823,22 +823,22 @@ void b3Vehicle_Reset( b3VehicleId vehicleId, b3Pos position, b3Quat rotation )
 	v->launchSpent = false;
 }
 
-void b3Vehicle_SetChassis( b3VehicleId vehicleId, b3VehicleChassis chassis )
+void b3WheeledVehicle_SetChassis( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleChassis chassis )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->chassis = b3SanitizeChassis( chassis );
 	v->massDirty = true;
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleChassis b3Vehicle_GetChassis( b3VehicleId vehicleId )
+b3WheeledVehicleChassis b3WheeledVehicle_GetChassis( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->chassis;
+	return b3GetWheeledVehicle( wheeledVehicleId )->chassis;
 }
 
-void b3Vehicle_SetWheel( b3VehicleId vehicleId, int wheelIndex, b3VehicleWheelDef wheel )
+void b3WheeledVehicle_SetWheel( b3WheeledVehicleId wheeledVehicleId, int wheelIndex, b3WheeledVehicleWheelDef wheel )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
 	if ( wheelIndex < 0 || v->wheelCount <= wheelIndex )
 	{
@@ -847,115 +847,115 @@ void b3Vehicle_SetWheel( b3VehicleId vehicleId, int wheelIndex, b3VehicleWheelDe
 
 	v->wheels[wheelIndex].def = b3SanitizeWheel( wheel );
 	v->massDirty = true;
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleWheelDef b3Vehicle_GetWheel( b3VehicleId vehicleId, int wheelIndex )
+b3WheeledVehicleWheelDef b3WheeledVehicle_GetWheel( b3WheeledVehicleId wheeledVehicleId, int wheelIndex )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
 	return v->wheels[b3ClampInt( wheelIndex, 0, v->wheelCount - 1 )].def;
 }
 
-void b3Vehicle_SetEngine( b3VehicleId vehicleId, b3VehicleEngine engine )
+void b3WheeledVehicle_SetEngine( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleEngine engine )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->engine = b3SanitizeEngine( engine );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleEngine b3Vehicle_GetEngine( b3VehicleId vehicleId )
+b3WheeledVehicleEngine b3WheeledVehicle_GetEngine( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->engine;
+	return b3GetWheeledVehicle( wheeledVehicleId )->engine;
 }
 
-void b3Vehicle_SetTurbo( b3VehicleId vehicleId, b3VehicleTurbo turbo )
+void b3WheeledVehicle_SetTurbo( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleTurbo turbo )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->turbo = b3SanitizeTurbo( turbo );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleTurbo b3Vehicle_GetTurbo( b3VehicleId vehicleId )
+b3WheeledVehicleTurbo b3WheeledVehicle_GetTurbo( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->turbo;
+	return b3GetWheeledVehicle( wheeledVehicleId )->turbo;
 }
 
-void b3Vehicle_SetTransmission( b3VehicleId vehicleId, b3VehicleTransmission transmission )
+void b3WheeledVehicle_SetTransmission( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleTransmission transmission )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->transmission = b3SanitizeTransmission( transmission );
 	v->gear = b3ClampInt( v->gear, -1, v->transmission.gearCount );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleTransmission b3Vehicle_GetTransmission( b3VehicleId vehicleId )
+b3WheeledVehicleTransmission b3WheeledVehicle_GetTransmission( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->transmission;
+	return b3GetWheeledVehicle( wheeledVehicleId )->transmission;
 }
 
-void b3Vehicle_SetDrivetrain( b3VehicleId vehicleId, b3VehicleDrivetrain drivetrain )
+void b3WheeledVehicle_SetDrivetrain( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleDrivetrain drivetrain )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->drivetrain = b3SanitizeDrivetrain( drivetrain, v->wheelCount );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleDrivetrain b3Vehicle_GetDrivetrain( b3VehicleId vehicleId )
+b3WheeledVehicleDrivetrain b3WheeledVehicle_GetDrivetrain( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->drivetrain;
+	return b3GetWheeledVehicle( wheeledVehicleId )->drivetrain;
 }
 
-void b3Vehicle_SetAntiRoll( b3VehicleId vehicleId, b3VehicleAntiRoll antiRoll )
+void b3WheeledVehicle_SetAntiRoll( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleAntiRoll antiRoll )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->antiRoll = b3SanitizeAntiRoll( antiRoll, v->wheelCount );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleAntiRoll b3Vehicle_GetAntiRoll( b3VehicleId vehicleId )
+b3WheeledVehicleAntiRoll b3WheeledVehicle_GetAntiRoll( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->antiRoll;
+	return b3GetWheeledVehicle( wheeledVehicleId )->antiRoll;
 }
 
-void b3Vehicle_SetSteering( b3VehicleId vehicleId, b3VehicleSteering steering )
+void b3WheeledVehicle_SetSteering( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleSteering steering )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->steering = b3SanitizeSteering( steering );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleSteering b3Vehicle_GetSteering( b3VehicleId vehicleId )
+b3WheeledVehicleSteering b3WheeledVehicle_GetSteering( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->steering;
+	return b3GetWheeledVehicle( wheeledVehicleId )->steering;
 }
 
-void b3Vehicle_SetAssists( b3VehicleId vehicleId, b3VehicleAssists assists )
+void b3WheeledVehicle_SetAssists( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleAssists assists )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	v->assists = b3SanitizeAssists( assists );
-	b3WakeVehicle( v );
+	b3WakeWheeledVehicle( v );
 }
 
-b3VehicleAssists b3Vehicle_GetAssists( b3VehicleId vehicleId )
+b3WheeledVehicleAssists b3WheeledVehicle_GetAssists( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->assists;
+	return b3GetWheeledVehicle( wheeledVehicleId )->assists;
 }
 
-void b3Vehicle_SetUserData( b3VehicleId vehicleId, void* userData )
+void b3WheeledVehicle_SetUserData( b3WheeledVehicleId wheeledVehicleId, void* userData )
 {
-	b3GetVehicle( vehicleId )->userData = userData;
+	b3GetWheeledVehicle( wheeledVehicleId )->userData = userData;
 }
 
-void* b3Vehicle_GetUserData( b3VehicleId vehicleId )
+void* b3WheeledVehicle_GetUserData( b3WheeledVehicleId wheeledVehicleId )
 {
-	return b3GetVehicle( vehicleId )->userData;
+	return b3GetWheeledVehicle( wheeledVehicleId )->userData;
 }
 
-b3VehicleState b3Vehicle_GetState( b3VehicleId vehicleId )
+b3WheeledVehicleState b3WheeledVehicle_GetState( b3WheeledVehicleId wheeledVehicleId )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
-	b3VehicleState state = { 0 };
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
+	b3WheeledVehicleState state = { 0 };
 	state.speed = v->speed;
 	state.engineRpm = v->engineSpeed * B3_RADIANS_TO_RPM;
 	state.boost = v->boost;
@@ -970,14 +970,14 @@ b3VehicleState b3Vehicle_GetState( b3VehicleId vehicleId )
 	return state;
 }
 
-static float b3GetWheelCompression( const b3VehicleWheel* wheel )
+static float b3GetWheelCompression( const b3WheeledVehicleWheel* wheel )
 {
-	const b3VehicleSuspension* s = &wheel->def.suspension;
+	const b3WheeledVehicleSuspension* s = &wheel->def.suspension;
 	float travel = s->maxLength - s->minLength;
 	return travel > 0.0f ? b3ClampFloat( ( s->maxLength - wheel->suspensionLength ) / travel, 0.0f, 1.0f ) : 0.0f;
 }
 
-static b3WorldTransform b3GetWheelTransform( const b3Vehicle* v, const b3VehicleWheel* wheel, b3WorldTransform chassis )
+static b3WorldTransform b3GetWheelTransform( const b3WheeledVehicle* v, const b3WheeledVehicleWheel* wheel, b3WorldTransform chassis )
 {
 	b3Vec3 up = v->chassis.up;
 	b3Vec3 axle = b3Cross( up, v->chassis.forward );
@@ -992,10 +992,10 @@ static b3WorldTransform b3GetWheelTransform( const b3Vehicle* v, const b3Vehicle
 	return result;
 }
 
-// The one place the wheel readout is built, b3Vehicle_GetWheelData packs this
-static b3VehicleWheelState b3MakeWheelState( const b3VehicleWheel* wheel )
+// The one place the wheel readout is built, b3WheeledVehicle_GetWheelData packs this
+static b3WheeledVehicleWheelState b3MakeWheelState( const b3WheeledVehicleWheel* wheel )
 {
-	b3VehicleWheelState state = { 0 };
+	b3WheeledVehicleWheelState state = { 0 };
 	state.hasContact = wheel->hasContact;
 	state.contactPoint = wheel->contactPoint;
 	state.contactNormal = wheel->contactNormal;
@@ -1017,24 +1017,24 @@ static b3VehicleWheelState b3MakeWheelState( const b3VehicleWheel* wheel )
 	return state;
 }
 
-b3VehicleWheelState b3Vehicle_GetWheelState( b3VehicleId vehicleId, int wheelIndex )
+b3WheeledVehicleWheelState b3WheeledVehicle_GetWheelState( b3WheeledVehicleId wheeledVehicleId, int wheelIndex )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
 	return b3MakeWheelState( v->wheels + b3ClampInt( wheelIndex, 0, v->wheelCount - 1 ) );
 }
 
-b3WorldTransform b3Vehicle_GetWheelTransform( b3VehicleId vehicleId, int wheelIndex )
+b3WorldTransform b3WheeledVehicle_GetWheelTransform( b3WheeledVehicleId wheeledVehicleId, int wheelIndex )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
-	b3VehicleWheel* wheel = v->wheels + b3ClampInt( wheelIndex, 0, v->wheelCount - 1 );
+	b3WheeledVehicleWheel* wheel = v->wheels + b3ClampInt( wheelIndex, 0, v->wheelCount - 1 );
 	return b3GetWheelTransform( v, wheel, b3Body_GetTransform( v->chassisId ) );
 }
 
 // Every documented word offset, JavaScript readers hard code them
 #define B3_CHECK_WHEEL_WORD( field, word )                                                                                       \
-	_Static_assert( offsetof( b3VehicleWheelData, field ) == ( word ) * 4, "wheel data layout is part of the API" )
+	_Static_assert( offsetof( b3WheeledVehicleWheelData, field ) == ( word ) * 4, "wheel data layout is part of the API" )
 B3_CHECK_WHEEL_WORD( position, 0 );
 B3_CHECK_WHEEL_WORD( rotation, 3 );
 B3_CHECK_WHEEL_WORD( contactPoint, 7 );
@@ -1054,22 +1054,22 @@ B3_CHECK_WHEEL_WORD( brakeTorque, 24 );
 B3_CHECK_WHEEL_WORD( flags, 25 );
 B3_CHECK_WHEEL_WORD( groundShapeId, 26 );
 B3_CHECK_WHEEL_WORD( userMaterialId, 28 );
-_Static_assert( sizeof( b3VehicleWheelData ) == 30 * 4, "wheel data layout is part of the API" );
+_Static_assert( sizeof( b3WheeledVehicleWheelData ) == 30 * 4, "wheel data layout is part of the API" );
 #undef B3_CHECK_WHEEL_WORD
 
-int b3Vehicle_GetWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int capacity )
+int b3WheeledVehicle_GetWheelData( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleWheelData* data, int capacity )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	int count = b3ClampInt( capacity, 0, v->wheelCount );
 	b3WorldTransform chassis = b3Body_GetTransform( v->chassisId );
 
 	for ( int i = 0; i < count; ++i )
 	{
-		const b3VehicleWheel* wheel = v->wheels + i;
-		b3VehicleWheelState state = b3MakeWheelState( wheel );
+		const b3WheeledVehicleWheel* wheel = v->wheels + i;
+		b3WheeledVehicleWheelState state = b3MakeWheelState( wheel );
 		b3WorldTransform xf = b3GetWheelTransform( v, wheel, chassis );
 
-		b3VehicleWheelData* out = data + i;
+		b3WheeledVehicleWheelData* out = data + i;
 		out->position = (b3Vec3){ (float)xf.p.x, (float)xf.p.y, (float)xf.p.z };
 		out->rotation = xf.q;
 		out->contactPoint = (b3Vec3){ (float)state.contactPoint.x, (float)state.contactPoint.y, (float)state.contactPoint.z };
@@ -1086,7 +1086,7 @@ int b3Vehicle_GetWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int
 		out->steerAngle = state.steerAngle;
 		out->driveTorque = state.driveTorque;
 		out->brakeTorque = state.brakeTorque;
-		out->flags = ( state.hasContact ? b3_vehicleWheelContact : 0u ) | ( state.isSticky ? b3_vehicleWheelSticky : 0u );
+		out->flags = ( state.hasContact ? b3_wheeledVehicleWheelContact : 0u ) | ( state.isSticky ? b3_wheeledVehicleWheelSticky : 0u );
 		out->groundShapeId = state.groundShapeId;
 		out->userMaterialId = state.userMaterialId;
 	}
@@ -1094,9 +1094,9 @@ int b3Vehicle_GetWheelData( b3VehicleId vehicleId, b3VehicleWheelData* data, int
 	return count;
 }
 
-float b3Vehicle_GetSprungMass( b3VehicleId vehicleId, int wheelIndex )
+float b3WheeledVehicle_GetSprungMass( b3WheeledVehicleId wheeledVehicleId, int wheelIndex )
 {
-	b3Vehicle* v = b3GetVehicle( vehicleId );
+	b3WheeledVehicle* v = b3GetWheeledVehicle( wheeledVehicleId );
 	B3_ASSERT( 0 <= wheelIndex && wheelIndex < v->wheelCount );
 	return v->wheels[b3ClampInt( wheelIndex, 0, v->wheelCount - 1 )].sprungMass;
 }
@@ -1183,7 +1183,7 @@ static float b3TireCurve( float slip, float peakSlip, float peakFriction, float 
 	return slideFriction;
 }
 
-static float b3EngineTorqueAt( const b3VehicleEngine* e, float rpm )
+static float b3EngineTorqueAt( const b3WheeledVehicleEngine* e, float rpm )
 {
 	if ( rpm >= e->maxRpm )
 	{
@@ -1209,7 +1209,7 @@ static float b3EngineTorqueAt( const b3VehicleEngine* e, float rpm )
 
 // Boost target of a turbo stage, 0 to 1. It eases in from the spool rpm to the full boost rpm and
 // scales with the load, as the exhaust flow does.
-static float b3TurboTarget( const b3VehicleTurboStage* s, float load, float rpm )
+static float b3TurboTarget( const b3WheeledVehicleTurboStage* s, float load, float rpm )
 {
 	float t = rpm >= s->spoolRpm ? 1.0f : 0.0f;
 	float range = s->fullBoostRpm - s->spoolRpm;
@@ -1242,9 +1242,9 @@ static float b3TurboLoad( float throttle, float fullBoost )
 // spins down slowly off throttle while the pressure dumps fast, so a shift or a short lift keeps
 // most of the spool and the boost comes back as soon as the throttle opens. Implicit, so a time
 // constant of zero or one far below the step is stable.
-static float b3UpdateTurbo( b3Vehicle* v, float throttle, float rpm, float dt, float fullBoost )
+static float b3UpdateTurbo( b3WheeledVehicle* v, float throttle, float rpm, float dt, float fullBoost )
 {
-	const b3VehicleTurbo* turbo = &v->turbo;
+	const b3WheeledVehicleTurbo* turbo = &v->turbo;
 	float load = b3TurboLoad( throttle, fullBoost );
 
 	// Anti-lag keeps the shaft driven and the manifold pressurized off throttle
@@ -1253,7 +1253,7 @@ static float b3UpdateTurbo( b3Vehicle* v, float throttle, float rpm, float dt, f
 	float boost = 0.0f;
 	for ( int i = 0; i < B3_MAX_VEHICLE_TURBO_STAGES; ++i )
 	{
-		const b3VehicleTurboStage* s = turbo->stages + i;
+		const b3WheeledVehicleTurboStage* s = turbo->stages + i;
 		if ( s->gain == 0.0f )
 		{
 			v->turboSpool[i] = 0.0f;
@@ -1326,20 +1326,20 @@ static void b3LimitSlip( float speedA, float speedB, float ratio, float* shareA,
 }
 
 // Torque share per wheel from the differentials. Shares sum to 1 over all driven wheels.
-static void b3ComputeTorqueShares( const b3Vehicle* v, float shares[B3_MAX_VEHICLE_WHEELS] )
+static void b3ComputeTorqueShares( const b3WheeledVehicle* v, float shares[B3_MAX_VEHICLE_WHEELS] )
 {
 	for ( int i = 0; i < B3_MAX_VEHICLE_WHEELS; ++i )
 	{
 		shares[i] = 0.0f;
 	}
 
-	const b3VehicleDrivetrain* d = &v->drivetrain;
+	const b3WheeledVehicleDrivetrain* d = &v->drivetrain;
 	float diffShares[B3_MAX_VEHICLE_DIFFERENTIALS];
 	float diffSpeeds[B3_MAX_VEHICLE_DIFFERENTIALS];
 	float totalShare = 0.0f;
 	for ( int i = 0; i < d->differentialCount; ++i )
 	{
-		const b3VehicleDifferential* diff = d->differentials + i;
+		const b3WheeledVehicleDifferential* diff = d->differentials + i;
 		diffShares[i] = diff->torqueRatio;
 		float speed = 0.0f;
 		int count = 0;
@@ -1386,7 +1386,7 @@ static void b3ComputeTorqueShares( const b3Vehicle* v, float shares[B3_MAX_VEHIC
 
 	for ( int i = 0; i < d->differentialCount; ++i )
 	{
-		const b3VehicleDifferential* diff = d->differentials + i;
+		const b3WheeledVehicleDifferential* diff = d->differentials + i;
 		float share = diffShares[i] / totalShare;
 		if ( diff->leftWheel >= 0 && diff->rightWheel >= 0 && diff->leftWheel != diff->rightWheel )
 		{
@@ -1408,9 +1408,9 @@ static void b3ComputeTorqueShares( const b3Vehicle* v, float shares[B3_MAX_VEHIC
 	}
 }
 
-static float b3GetGearRatio( const b3Vehicle* v )
+static float b3GetGearRatio( const b3WheeledVehicle* v )
 {
-	const b3VehicleTransmission* t = &v->transmission;
+	const b3WheeledVehicleTransmission* t = &v->transmission;
 	if ( v->gear > 0 )
 	{
 		return t->gearRatios[b3MinInt( v->gear, t->gearCount ) - 1] * t->finalDrive;
@@ -1424,9 +1424,9 @@ static float b3GetGearRatio( const b3Vehicle* v )
 	return 0.0f;
 }
 
-static void b3UpdateGearbox( b3Vehicle* v, float dt, float shiftRpm, bool blockUpshift )
+static void b3UpdateGearbox( b3WheeledVehicle* v, float dt, float shiftRpm, bool blockUpshift )
 {
-	const b3VehicleTransmission* t = &v->transmission;
+	const b3WheeledVehicleTransmission* t = &v->transmission;
 
 	if ( v->shiftTimer > 0.0f )
 	{
@@ -1449,7 +1449,7 @@ static void b3UpdateGearbox( b3Vehicle* v, float dt, float shiftRpm, bool blockU
 	float throttle = 0.0f;
 	const float switchSpeed = 1.0f;
 
-	if ( t->mode == b3_vehicleTransmissionAuto )
+	if ( t->mode == b3_wheeledVehicleTransmissionAuto )
 	{
 		// Without forward input the brake can double as reverse: it brakes while moving forward and
 		// selects reverse and drives backward once below the switch speed
@@ -1534,11 +1534,11 @@ typedef struct b3WheelFrame
 	b3BodyId groundBodyId;
 } b3WheelFrame;
 
-static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3WorldTransform xf, b3Vec3 up,
+static void b3CastWheel( b3World* world, b3WheeledVehicle* v, b3WheeledVehicleWheel* wheel, b3WorldTransform xf, b3Vec3 up,
 						 b3Vec3 heading, b3Vec3 axle, b3BodyId anchorId, b3WheelFrame* frame )
 {
-	const b3VehicleWheelDef* def = &wheel->def;
-	const b3VehicleSuspension* s = &def->suspension;
+	const b3WheeledVehicleWheelDef* def = &wheel->def;
+	const b3WheeledVehicleSuspension* s = &def->suspension;
 	float radius = def->radius;
 
 	b3Vec3 down = b3Neg( up );
@@ -1552,7 +1552,7 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 	float endLength = s->maxLength;
 	float contactOffset = 0.0f;
 
-	if ( def->castType == b3_vehicleCastCylinder )
+	if ( def->castType == b3_wheeledVehicleCastCylinder )
 	{
 		float rounding = b3MinFloat( 0.05f, 0.5f * b3MinFloat( radius, 0.5f * def->width ) );
 		float core = radius - rounding;
@@ -1571,7 +1571,7 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 		proxy.count = count;
 		proxy.radius = rounding;
 	}
-	else if ( def->castType == b3_vehicleCastSphere )
+	else if ( def->castType == b3_wheeledVehicleCastSphere )
 	{
 		proxy.radius = radius;
 	}
@@ -1595,7 +1595,7 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 	b3WorldId worldId = { (uint16_t)( world->worldId + 1 ), world->generation };
 	if ( castLength > 0.0f )
 	{
-		if ( def->castType == b3_vehicleCastRay )
+		if ( def->castType == b3_wheeledVehicleCastRay )
 		{
 			b3World_CastRay( worldId, origin, b3MulSV( castLength, down ), v->chassis.castFilter, b3WheelCastCallback,
 							 &ctx );
@@ -1663,7 +1663,7 @@ static void b3CastWheel( b3World* world, b3Vehicle* v, b3VehicleWheel* wheel, b3
 	frame->cosAngle = b3MaxFloat( b3Dot( ctx.normal, up ), 0.1f );
 }
 
-static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
+static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float dt )
 {
 	if ( b3IsBodyIdValidInternal( world, v->chassisId ) == false )
 	{
@@ -1676,7 +1676,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		return;
 	}
 
-	b3VehicleInput* input = &v->input;
+	b3WheeledVehicleInput* input = &v->input;
 	bool hasInput = input->forward != 0.0f || input->brake != 0.0f || input->steer != 0.0f || input->handbrake != 0.0f;
 	if ( body->setIndex >= b3_firstSleepingSet )
 	{
@@ -1690,17 +1690,17 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 	if ( v->massDirty )
 	{
-		b3ApplyVehicleMass( world, v );
+		b3ApplyWheeledVehicleMass( world, v );
 	}
 
-	b3BodyId anchorId = b3GetVehicleAnchor( world );
+	b3BodyId anchorId = b3GetWheeledVehicleAnchor( world );
 	int wheelCount = v->wheelCount;
 	float inv_h = world->inv_h;
 
 	// Read back the solver results of the previous step
 	for ( int i = 0; i < wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
 		wheel->load = 0.0f;
 		wheel->longitudinalForce = 0.0f;
 		wheel->lateralForce = 0.0f;
@@ -1712,7 +1712,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		}
 
 		b3Joint* joint = b3GetJointFullId( world, wheel->jointId );
-		b3VehicleWheelJoint* sim = &b3GetJointSim( world, joint )->vehicleWheelJoint;
+		b3WheeledVehicleWheelJoint* sim = &b3GetJointSim( world, joint )->wheeledVehicleWheelJoint;
 		wheel->omega = b3IsValidFloat( sim->omega ) ? sim->omega : 0.0f;
 		if ( sim->hasContact )
 		{
@@ -1743,7 +1743,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	bool blockUpshift = false;
 	for ( int i = 0; i < wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
 		if ( shares[i] > 0.0f &&
 			 ( wheel->hasContact == false || b3AbsFloat( wheel->slipRatio ) > 2.0f * wheel->def.tire.longitudinalPeakSlip ) )
 		{
@@ -1780,7 +1780,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 	// Steering: speed sensitive, rate limited, with counter-steer into rear slides
 	{
-		const b3VehicleSteering* st = &v->steering;
+		const b3WheeledVehicleSteering* st = &v->steering;
 		float speed = b3AbsFloat( v->speed );
 		float maxAngle = st->maxAngle;
 		if ( st->speedReference > 0.0f )
@@ -1841,8 +1841,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 	for ( int i = 0; i < wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
-		const b3VehicleWheelDef* def = &wheel->def;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
+		const b3WheeledVehicleWheelDef* def = &wheel->def;
 
 		float angle = v->steer;
 		if ( v->steering.ackermann > 0.0f && wheelBase > 0.0f && b3AbsFloat( angle ) > 1e-4f )
@@ -1893,14 +1893,14 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	float antiRollForce[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	for ( int i = 0; i < v->antiRoll.barCount; ++i )
 	{
-		const b3VehicleAntiRollBar* bar = v->antiRoll.bars + i;
+		const b3WheeledVehicleAntiRollBar* bar = v->antiRoll.bars + i;
 		if ( bar->leftWheel < 0 || bar->rightWheel < 0 || bar->leftWheel == bar->rightWheel )
 		{
 			continue;
 		}
 
-		b3VehicleWheel* wl = v->wheels + bar->leftWheel;
-		b3VehicleWheel* wr = v->wheels + bar->rightWheel;
+		b3WheeledVehicleWheel* wl = v->wheels + bar->leftWheel;
+		b3WheeledVehicleWheel* wr = v->wheels + bar->rightWheel;
 		float cl = wl->hasContact ? wl->def.suspension.maxLength - wl->suspensionLength : 0.0f;
 		float cr = wr->hasContact ? wr->def.suspension.maxLength - wr->suspensionLength : 0.0f;
 		float force = bar->stiffness * ( cl - cr );
@@ -1921,9 +1921,9 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	float gravity = b3GravityLength( world );
 	for ( int i = 0; i < wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
-		const b3VehicleWheelDef* def = &wheel->def;
-		const b3VehicleTire* tire = &def->tire;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
+		const b3WheeledVehicleWheelDef* def = &wheel->def;
+		const b3WheeledVehicleTire* tire = &def->tire;
 		b3WheelFrame* frame = frames + i;
 
 		float serviceTorque = brake * def->maxBrakeTorque;
@@ -2120,7 +2120,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		launching = true;
 		for ( int i = 0; i < wheelCount; ++i )
 		{
-			const b3VehicleWheel* wheel = v->wheels + i;
+			const b3WheeledVehicleWheel* wheel = v->wheels + i;
 			if ( shares[i] > 0.0f && wheel->hasContact )
 			{
 				float slip = wheel->slipRatio / wheel->def.tire.longitudinalPeakSlip;
@@ -2136,8 +2136,8 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	// Implicit engine, clutch and driven wheel solve. The ground reaction from the previous step
 	// stands in for the tire load so the engine feels the car's inertia.
 	{
-		const b3VehicleEngine* e = &v->engine;
-		const b3VehicleTransmission* t = &v->transmission;
+		const b3WheeledVehicleEngine* e = &v->engine;
+		const b3WheeledVehicleTransmission* t = &v->transmission;
 		float ratio = b3GetGearRatio( v );
 		float h = dt;
 
@@ -2151,7 +2151,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 				continue;
 			}
 
-			b3VehicleWheel* wheel = v->wheels + i;
+			b3WheeledVehicleWheel* wheel = v->wheels + i;
 			float g = shares[i] * ratio;
 			float invI = 1.0f / wheel->def.inertia;
 			float groundTorque = wheel->hasContact ? -wheel->longitudinalForce * wheel->def.radius : 0.0f;
@@ -2318,7 +2318,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 
 		for ( int i = 0; i < wheelCount; ++i )
 		{
-			b3VehicleWheel* wheel = v->wheels + i;
+			b3WheeledVehicleWheel* wheel = v->wheels + i;
 			float torque = shares[i] * ratio * clutchTorque;
 
 			// Drive torque has the sign of the gear ratio, so this also caps reverse. Engine braking
@@ -2334,33 +2334,33 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	// Write the wheel joints, retargeting them when the ground body changes
 	for ( int i = 0; i < wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
-		const b3VehicleWheelDef* def = &wheel->def;
-		const b3VehicleSuspension* s = &def->suspension;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
+		const b3WheeledVehicleWheelDef* def = &wheel->def;
+		const b3WheeledVehicleSuspension* s = &def->suspension;
 		b3WheelFrame* frame = frames + i;
 
 		// Wheel spin damping, implicit
 		wheel->omega /= 1.0f + dt * def->angularDamping / def->inertia;
 
-		b3VehicleWheelJoint carry = { 0 };
+		b3WheeledVehicleWheelJoint carry = { 0 };
 		bool valid = B3_IS_NON_NULL( wheel->jointId );
 		if ( valid && B3_ID_EQUALS( wheel->groundBodyId, frame->groundBodyId ) == false )
 		{
 			b3Joint* joint = b3GetJointFullId( world, wheel->jointId );
-			carry = b3GetJointSim( world, joint )->vehicleWheelJoint;
+			carry = b3GetJointSim( world, joint )->wheeledVehicleWheelJoint;
 			b3DestroyJointInternal( world, joint, false );
 			valid = false;
 		}
 
 		if ( valid == false )
 		{
-			wheel->jointId = b3CreateVehicleWheelJointInternal( world, v->chassisId, frame->groundBodyId );
+			wheel->jointId = b3CreateWheeledVehicleWheelJointInternal( world, v->chassisId, frame->groundBodyId );
 			wheel->groundBodyId = frame->groundBodyId;
 		}
 
 		b3Joint* joint = b3GetJointFullId( world, wheel->jointId );
 		b3JointSim* base = b3GetJointSim( world, joint );
-		b3VehicleWheelJoint* sim = &base->vehicleWheelJoint;
+		b3WheeledVehicleWheelJoint* sim = &base->wheeledVehicleWheelJoint;
 		if ( valid == false )
 		{
 			sim->springImpulse = carry.springImpulse;
@@ -2415,7 +2415,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	// Visual spin
 	for ( int i = 0; i < wheelCount; ++i )
 	{
-		b3VehicleWheel* wheel = v->wheels + i;
+		b3WheeledVehicleWheel* wheel = v->wheels + i;
 		float angle = wheel->rotationAngle + wheel->omega * dt;
 		if ( angle > B3_PI || angle < -B3_PI )
 		{
@@ -2424,7 +2424,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 		wheel->rotationAngle = angle;
 	}
 
-	const b3VehicleAssists* assists = &v->assists;
+	const b3WheeledVehicleAssists* assists = &v->assists;
 
 	// Aerodynamics
 	{
@@ -2534,7 +2534,7 @@ static void b3UpdateVehicle( b3World* world, b3Vehicle* v, float dt )
 	}
 }
 
-void b3UpdateVehiclesPreStep( b3World* world, float timeStep )
+void b3UpdateWheeledVehiclesPreStep( b3World* world, float timeStep )
 {
 	if ( world->vehicles.count == 0 || timeStep <= 0.0f )
 	{
@@ -2543,12 +2543,12 @@ void b3UpdateVehiclesPreStep( b3World* world, float timeStep )
 
 	for ( int i = 0; i < world->vehicles.count; ++i )
 	{
-		b3Vehicle* v = world->vehicles.data + i;
+		b3WheeledVehicle* v = world->vehicles.data + i;
 		if ( v->id == B3_NULL_INDEX || v->generation == 0 )
 		{
 			continue;
 		}
 
-		b3UpdateVehicle( world, v, timeStep );
+		b3UpdateWheeledVehicle( world, v, timeStep );
 	}
 }

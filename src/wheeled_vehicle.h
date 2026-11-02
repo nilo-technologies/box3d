@@ -5,13 +5,13 @@
 
 #include "container.h"
 
-#include "box3d/vehicle.h"
+#include "box3d/wheeled_vehicle.h"
 
 typedef struct b3World b3World;
 
-typedef struct b3VehicleWheel
+typedef struct b3WheeledVehicleWheel
 {
-	b3VehicleWheelDef def;
+	b3WheeledVehicleWheelDef def;
 
 	b3JointId jointId;
 
@@ -43,9 +43,9 @@ typedef struct b3VehicleWheel
 	float brakeTorque;
 	bool hasContact;
 	bool isSticky;
-} b3VehicleWheel;
+} b3WheeledVehicleWheel;
 
-typedef struct b3Vehicle
+typedef struct b3WheeledVehicle
 {
 	int id;
 	uint16_t generation;
@@ -53,18 +53,18 @@ typedef struct b3Vehicle
 	b3BodyId chassisId;
 	void* userData;
 
-	b3VehicleChassis chassis;
-	b3VehicleWheel wheels[B3_MAX_VEHICLE_WHEELS];
+	b3WheeledVehicleChassis chassis;
+	b3WheeledVehicleWheel wheels[B3_MAX_VEHICLE_WHEELS];
 	int wheelCount;
-	b3VehicleEngine engine;
-	b3VehicleTurbo turbo;
-	b3VehicleTransmission transmission;
-	b3VehicleDrivetrain drivetrain;
-	b3VehicleAntiRoll antiRoll;
-	b3VehicleSteering steering;
-	b3VehicleAssists assists;
+	b3WheeledVehicleEngine engine;
+	b3WheeledVehicleTurbo turbo;
+	b3WheeledVehicleTransmission transmission;
+	b3WheeledVehicleDrivetrain drivetrain;
+	b3WheeledVehicleAntiRoll antiRoll;
+	b3WheeledVehicleSteering steering;
+	b3WheeledVehicleAssists assists;
 
-	b3VehicleInput input;
+	b3WheeledVehicleInput input;
 
 	// Mass properties computed from the chassis shapes when the vehicle was created
 	float baseMass;
@@ -97,9 +97,9 @@ typedef struct b3Vehicle
 	bool isLaunching;
 	bool launchSpent;
 	float launchTimer;
-} b3Vehicle;
+} b3WheeledVehicle;
 
-b3DeclareArray( b3Vehicle );
+b3DeclareArray( b3WheeledVehicle );
 
-void b3UpdateVehiclesPreStep( b3World* world, float timeStep );
-void b3DestroyVehiclesOnBody( b3World* world, b3BodyId bodyId );
+void b3UpdateWheeledVehiclesPreStep( b3World* world, float timeStep );
+void b3DestroyWheeledVehiclesOnBody( b3World* world, b3BodyId bodyId );
