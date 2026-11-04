@@ -85,6 +85,10 @@ typedef struct b3WheeledVehicle
 	float latencyTimer;
 	float steer;
 	float stuckTimer;
+	// The side self righting rolls toward near the roof (+1 or -1), or 0 when not yet chosen
+	float rightingSide;
+	// Self righting has started and holds until the car is back on its side or wheels
+	bool righting;
 	float speed;
 	float throttle;
 	float brake;
