@@ -937,11 +937,53 @@ static int RampJumpTest( void )
 	ENSURE( airborne && landed );
 	ENSURE( upshiftOnLanding == false );
 
-	b3WheeledVehicleWheelDef wheel = b3WheeledVehicle_GetWheel( wheeledVehicleId, 0 );
-	ENSURE( minLength > wheel.suspension.minLength - 0.1f );
+	// The bump stop's force is capped (see CurbStrikeTest), so a landing from a 4.8 m jump crushes it
+	// a little. The wheel must still stay on the right side of the chassis, and the chassis, checked
+	// below, must stay off the ground.
+	ENSURE( minLength > 0.0f );
 
 	// Chassis bottom stays above the ground
 	ENSURE( minHeight > 0.3f );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
+
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
+// A curb struck at speed closes the suspension travel within a few substeps. A rigid bump stop
+// stopped that with an enormous impulse along the contact normal that threw the car: 146 km/h into
+// a 0.3 m curb lifted the chassis more than 3 m and rolled it onto its roof. The capped bump stop
+// lets the wheel bottom out against the chassis instead, so the chassis rises only the curb height.
+static int CurbStrikeTest( void )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	CreateGroundBox( worldId, (b3Pos){ 0.0f, 0.15f, 60.0f }, b3Quat_identity, (b3Vec3){ 10.0f, 0.15f, 10.0f }, 0.6f );
+
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
+	Step( worldId, 60 );
+	float restHeight = (float)b3Body_GetPosition( chassisId ).y;
+
+	// 146 km/h, held by the throttle
+	b3Body_SetLinearVelocity( chassisId, (b3Vec3){ 0.0f, 0.0f, 40.5f } );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
+
+	float maxHeight = restHeight;
+	float minUp = 1.0f;
+	for ( int i = 0; i < 180; ++i )
+	{
+		Step( worldId, 1 );
+		maxHeight = b3MaxFloat( maxHeight, (float)b3Body_GetPosition( chassisId ).y );
+		b3Vec3 up = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisY );
+		minUp = b3MinFloat( minUp, up.y );
+	}
+
+	float z = (float)b3Body_GetPosition( chassisId ).z;
+	printf( "    chassis rose %.2f m over the curb, worst up %.2f, ended at z %.1f\n", maxHeight - restHeight, minUp, z );
+	ENSURE( z > 80.0f );
+	ENSURE( maxHeight - restHeight < 0.8f );
+	ENSURE( minUp > 0.9f );
 	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
 
 	b3DestroyWorld( worldId );
@@ -1818,6 +1860,7 @@ int WheeledVehicleTest( void )
 	RUN_SUBTEST( SlopeHoldTest );
 	RUN_SUBTEST( DynamicGroundTest );
 	RUN_SUBTEST( RampJumpTest );
+	RUN_SUBTEST( CurbStrikeTest );
 	RUN_SUBTEST( RobustnessTest );
 	RUN_SUBTEST( DeterminismTest );
 	RUN_SUBTEST( DestroyTest );

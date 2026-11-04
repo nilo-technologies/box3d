@@ -2337,7 +2337,8 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 	}
 
 	// Write the wheel joints, retargeting them when the ground body changes
-	float bumpStopGravity = b3GravityLength( world );
+	// The raw gravity, since b3GravityLength falls back to 9.81 and the bump stop is uncapped in zero gravity
+	float bumpStopGravity = b3Length( world->gravity );
 	for ( int i = 0; i < wheelCount; ++i )
 	{
 		b3WheeledVehicleWheel* wheel = v->wheels + i;
