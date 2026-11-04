@@ -40,6 +40,11 @@
 #define B3_RELAXATION_MIN_SPEED 1.0f
 
 #define B3_RPM_TO_RADIANS ( 2.0f * B3_PI / 60.0f )
+
+// The bump stop pushes with at most this multiple of the wheel's static load (sprung weight)
+#ifndef B3_BUMP_STOP_MAX_LOAD
+#define B3_BUMP_STOP_MAX_LOAD 6.0f
+#endif
 #define B3_RADIANS_TO_RPM ( 60.0f / ( 2.0f * B3_PI ) )
 #define B3_VEHICLE_RING_COUNT 12
 
@@ -2332,6 +2337,8 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 	}
 
 	// Write the wheel joints, retargeting them when the ground body changes
+	// The raw gravity, since b3GravityLength falls back to 9.81 and the bump stop is uncapped in zero gravity
+	float bumpStopGravity = b3Length( world->gravity );
 	for ( int i = 0; i < wheelCount; ++i )
 	{
 		b3WheeledVehicleWheel* wheel = v->wheels + i;
@@ -2403,6 +2410,7 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		sim->rollOffset = frame->rollOffset;
 		sim->springC = springC;
 		sim->bumpC = ( wheel->suspensionLength - s->minLength ) * cosAngle;
+		sim->maxBumpForce = bumpStopGravity > 0.0f ? B3_BUMP_STOP_MAX_LOAD * wheel->sprungMass * bumpStopGravity : FLT_MAX;
 		sim->stiffness = stiffness;
 		sim->compressionDamping = wheel->compressionDamping;
 		sim->reboundDamping = wheel->reboundDamping;

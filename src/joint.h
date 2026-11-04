@@ -173,6 +173,9 @@ typedef struct b3WheeledVehicleWheelJoint
 	float springC;
 	float bumpC;
 
+	// Largest force the bump stop applies (N). Its impulse limit is this times the substep.
+	float maxBumpForce;
+
 	float stiffness;
 	float compressionDamping;
 	float reboundDamping;

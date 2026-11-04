@@ -244,7 +244,10 @@ void b3SolveWheeledVehicleWheelJoint( b3JointSim* base, b3StepContext* context, 
 		B3_UNUSED( useBias );
 
 		float impulse = -joint->normalMass * ( cdot + bias );
-		float newImpulse = b3MaxFloat( joint->bumpImpulse + impulse, 0.0f );
+		// A bump stop that is perfectly rigid turns a hard landing or a curb strike into a huge upward
+		// impulse on the chassis. Capping the force lets the wheel bottom out against the chassis
+		// instead, like a real bump stop that crushes.
+		float newImpulse = b3ClampFloat( joint->bumpImpulse + impulse, 0.0f, h * joint->maxBumpForce );
 		impulse = newImpulse - joint->bumpImpulse;
 		joint->bumpImpulse = newImpulse;
 
