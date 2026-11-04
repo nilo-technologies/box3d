@@ -823,6 +823,8 @@ void b3WheeledVehicle_Reset( b3WheeledVehicleId wheeledVehicleId, b3Pos position
 	v->latencyTimer = 0.0f;
 	v->steer = 0.0f;
 	v->stuckTimer = 0.0f;
+	v->rightingSide = 0.0f;
+	v->righting = false;
 	v->stuck = false;
 	v->isLaunching = false;
 	v->launchSpent = false;
@@ -1114,6 +1116,8 @@ typedef struct b3WheelCastContext
 	int chassisBodyId;
 	b3Vec3 up;
 	float minSlopeCos;
+	// A cast that starts inside the ground counts as a contact only while the car is the right way up
+	bool acceptStartInside;
 
 	bool hit;
 	float fraction;
@@ -1152,7 +1156,12 @@ static float b3WheelCastCallback( b3ShapeId shapeId, b3Pos point, b3Vec3 normal,
 			return -1.0f;
 		}
 
-		// Started inside, there is no normal
+		// Started inside, there is no normal. On a car past its side the wheels are in the air and the
+		// cast starts in the ground the body lies on: a contact there pins the car to its roof.
+		if ( ctx->acceptStartInside == false )
+		{
+			return -1.0f;
+		}
 		normal = ctx->up;
 	}
 
@@ -1596,6 +1605,8 @@ static void b3CastWheel( b3World* world, b3WheeledVehicle* v, b3WheeledVehicleWh
 	ctx.chassisBodyId = v->chassisId.index1 - 1;
 	ctx.up = up;
 	ctx.minSlopeCos = b3ComputeCosSin( v->chassis.maxSlopeAngle ).cosine;
+	float gravityLength = b3Length( world->gravity );
+	ctx.acceptStartInside = gravityLength == 0.0f || b3Dot( up, world->gravity ) < 0.0f;
 
 	b3WorldId worldId = { (uint16_t)( world->worldId + 1 ), world->generation };
 	if ( castLength > 0.0f )
@@ -2484,8 +2495,30 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		{
 			u = b3Normalize( u );
 			float roll = b3Atan2( b3Dot( b3Cross( up, u ), forward ), b3Dot( up, u ) );
+
+			// Near the roof the sign of the roll is noise: on a level roof atan2 returns +pi and -pi on
+			// alternate steps and the righting torque cancels itself. Pick a side on entering that
+			// band, the one the car leans or rolls toward, and hold it until the car leaves it.
+			if ( b3AbsFloat( roll ) > B3_PI - 0.3f )
+			{
+				if ( v->rightingSide == 0.0f )
+				{
+					float rate = b3Dot( w, forward );
+					float lean = b3AbsFloat( rate ) > 0.05f ? rate : roll;
+					v->rightingSide = lean < 0.0f ? -1.0f : 1.0f;
+				}
+				roll = v->rightingSide * b3AbsFloat( roll );
+			}
+			else
+			{
+				v->rightingSide = 0.0f;
+			}
 			bool partial = 0 < contactCount && contactCount < wheelCount && b3AbsFloat( roll ) > 0.3f;
-			bool flipped = v->stuckTimer > 0.5f;
+			// Once started, the righting holds while the car is still over: lifting the body off its
+			// roof moves it faster than the stuck speed, which would reset the timer mid roll and
+			// drop the car back onto its roof
+			bool flipped = ( v->stuckTimer > 0.5f || v->righting ) && uprightness < 0.3f;
+			v->righting = flipped;
 			if ( partial || flipped )
 			{
 				float stiffness = flipped ? 3.0f * assists->selfRighting : assists->selfRighting;
