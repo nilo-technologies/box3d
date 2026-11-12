@@ -316,13 +316,18 @@ static int HighGearStartTest( void )
 // A full throttle launch from rest, with and without traction control. forward is 1 to launch
 // forward and -1 to launch in reverse. Returns the largest driven wheel slip in that direction.
 // Launch control is off so this measures traction control alone.
-static float LaunchSlip( bool tractionControl, float forward )
+static float LaunchSlipWith( bool tractionControl, float forward, float loadSensitivity, float referenceLoad )
 {
 	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
 	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
 	def.assists.tractionControl = tractionControl;
 	def.assists.launchControl = false;
+	for ( int i = 0; i < def.wheelCount; ++i )
+	{
+		def.wheels[i].tire.loadSensitivity = loadSensitivity;
+		def.wheels[i].tire.referenceLoad = referenceLoad;
+	}
 	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	Step( worldId, 120 );
 
@@ -340,6 +345,11 @@ static float LaunchSlip( bool tractionControl, float forward )
 
 	b3DestroyWorld( worldId );
 	return maxSlip;
+}
+
+static float LaunchSlip( bool tractionControl, float forward )
+{
+	return LaunchSlipWith( tractionControl, forward, 0.0f, 0.0f );
 }
 
 // Full throttle at full lock from 70 km/h. Returns the largest chassis sideslip angle in degrees.
@@ -548,7 +558,7 @@ static int SlipRelaxationTest( void )
 	return 0;
 }
 
-static float BrakingDistanceWith( bool abs, float loadSensitivity )
+static float BrakingDistanceWith( bool abs, float loadSensitivity, float referenceLoad )
 {
 	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
@@ -557,6 +567,7 @@ static float BrakingDistanceWith( bool abs, float loadSensitivity )
 	for ( int i = 0; i < def.wheelCount; ++i )
 	{
 		def.wheels[i].tire.loadSensitivity = loadSensitivity;
+		def.wheels[i].tire.referenceLoad = referenceLoad;
 	}
 	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
 	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
@@ -588,7 +599,7 @@ static float BrakingDistanceWith( bool abs, float loadSensitivity )
 
 static float BrakingDistance( bool abs )
 {
-	return BrakingDistanceWith( abs, 0.0f );
+	return BrakingDistanceWith( abs, 0.0f, 0.0f );
 }
 
 static int BrakingTest( void )
@@ -737,6 +748,23 @@ static int AntiRollTest( void )
 	return 0;
 }
 
+// The default car's mean wheel load at rest on flat ground
+static float MeanStaticWheelLoad( void )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 120 );
+	float sum = 0.0f;
+	for ( int i = 0; i < def.wheelCount; ++i )
+	{
+		sum += b3WheeledVehicle_GetWheelState( wheeledVehicleId, i ).load;
+	}
+	b3DestroyWorld( worldId );
+	return sum / (float)def.wheelCount;
+}
+
 // The radius at half lock and 15 m/s with the roll stiffness all at one end
 static float BarBiasRadius( float loadSensitivity, bool stiffFront )
 {
@@ -776,9 +804,24 @@ static int LoadSensitivityTest( void )
 
 	// 100-0 km/h with ABS: the static load is the reference, so only the weight moving forward under
 	// braking changes the grip, and the stop stays close
-	float stops[2] = { BrakingDistanceWith( true, 0.0f ), BrakingDistanceWith( true, 0.3f ) };
+	float stops[2] = { BrakingDistanceWith( true, 0.0f, 0.0f ), BrakingDistanceWith( true, 0.3f, 0.0f ) };
 	printf( "    100-0 km/h braking with abs: %.1f m plain, %.1f m load sensitive\n", stops[0], stops[1] );
 	ENSURE( stops[0] > 0.0f && stops[1] > 0.95f * stops[0] && stops[1] < 1.25f * stops[0] );
+
+	// An explicit reference below the static load: every tire already reads 1.67x its reference at
+	// rest, so it grips about 20% less per newton and the stop is that much longer
+	float referenceLoad = 0.6f * MeanStaticWheelLoad();
+	float lowReference = BrakingDistanceWith( true, 0.3f, referenceLoad );
+	printf( "    with the reference at 60%% of the static load (%.0f N): %.1f m\n", referenceLoad, lowReference );
+	ENSURE( referenceLoad > 0.0f && lowReference > 1.15f * stops[0] );
+
+	// Traction control caps the drive at the scaled peak, so a launch on the less grippy tire still
+	// holds near the peak slip. Without the scale in the cap the drive would exceed the grip and spin.
+	float launch = LaunchSlipWith( true, 1.0f, 0.3f, referenceLoad );
+	float spin = LaunchSlipWith( false, 1.0f, 0.3f, referenceLoad );
+	printf( "    launch slip ratio on that tire: %.2f with traction control, %.2f without\n", launch, spin );
+	ENSURE( launch < 0.15f );
+	ENSURE( spin > 1.0f );
 	return 0;
 }
 
