@@ -89,6 +89,8 @@ b3WheeledVehicleWheelDef b3DefaultWheeledVehicleWheelDef( void )
 	def.tire.lateralSlideFriction = 0.92f;
 	def.tire.rollingResistance = 0.015f;
 	def.tire.longitudinalRelaxationLength = 0.3f;
+	def.tire.loadSensitivity = 0.0f;
+	def.tire.referenceLoad = 0.0f;
 	return def;
 }
 
@@ -267,6 +269,8 @@ static b3WheeledVehicleWheelDef b3SanitizeWheel( b3WheeledVehicleWheelDef w )
 	t->lateralSlideFriction = b3SanitizeFloat( t->lateralSlideFriction, 0.0f, 100.0f, 0.0f );
 	t->rollingResistance = b3SanitizeFloat( t->rollingResistance, 0.0f, 10.0f, 0.0f );
 	t->longitudinalRelaxationLength = b3SanitizeFloat( t->longitudinalRelaxationLength, 0.0f, 10.0f, 0.0f );
+	t->loadSensitivity = b3SanitizeFloat( t->loadSensitivity, 0.0f, 1.0f, 0.0f );
+	t->referenceLoad = b3SanitizeFloat( t->referenceLoad, 0.0f, 1e7f, 0.0f );
 	return w;
 }
 
@@ -1181,6 +1185,30 @@ static float b3WheelCastCallback( b3ShapeId shapeId, b3Pos point, b3Vec3 normal,
 	return fraction;
 }
 
+// Load sensitivity, linear in the load as in the Magic Formula: the friction coefficients scale by
+// 1 - sensitivity * (load / reference - 1), so a tire grips less per newton as its load rises. The
+// force, scale * load, then peaks at a load ratio of (1 + k) / 2k; the ratio is capped there so more
+// load never means less force, and at 4. Below 0.25 (a wheel lifting) it holds, so a nearly unloaded
+// tire does not read an absurd coefficient. No transcendental functions, for determinism.
+static float b3TireLoadScale( const b3WheeledVehicleTire* tire, float load, float staticLoad )
+{
+	float k = tire->loadSensitivity;
+	if ( k <= 0.0f )
+	{
+		return 1.0f;
+	}
+
+	float reference = tire->referenceLoad > 0.0f ? tire->referenceLoad : staticLoad;
+	if ( reference <= 0.0f || load <= 0.0f )
+	{
+		return 1.0f;
+	}
+
+	float maxRatio = b3MinFloat( 4.0f, ( 1.0f + k ) / ( 2.0f * k ) );
+	float ratio = b3ClampFloat( load / reference, 0.25f, maxRatio );
+	return 1.0f - k * ( ratio - 1.0f );
+}
+
 static float b3TireCurve( float slip, float peakSlip, float peakFriction, float slideSlip, float slideFriction )
 {
 	if ( slip <= peakSlip )
@@ -1999,7 +2027,10 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		}
 		wheel->slipAngle = b3Atan2( vLat, b3AbsFloat( vLong ) + 1.0f );
 
-		float ground = frame->groundScale;
+		// The ground's friction and the tire's load sensitivity scale every coefficient below, so the
+		// lateral force, the longitudinal peak and the ABS and traction control caps all agree. The
+		// reference is the static load on level ground, so the coefficients hold for a car at rest.
+		float ground = frame->groundScale * b3TireLoadScale( tire, load, wheel->sprungMass * gravity );
 		float muY = ground * b3TireCurve( b3AbsFloat( wheel->slipAngle ), tire->lateralPeakAngle, tire->lateralPeakFriction,
 										  tire->lateralSlideAngle, tire->lateralSlideFriction );
 

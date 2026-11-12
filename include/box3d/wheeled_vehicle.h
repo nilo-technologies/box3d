@@ -112,6 +112,19 @@ typedef struct b3WheeledVehicleTire
 	/// between the wheel and ground speed then takes a moment to become a large slip, so pulling
 	/// away does not break the tire loose at once. At speed it settles within a step. 0 is off.
 	float longitudinalRelaxationLength;
+
+	/// How fast the grip falls as the load on the tire rises, as on real tires: every friction
+	/// coefficient is scaled by 1 - loadSensitivity * (load / referenceLoad - 1), with the load ratio
+	/// held between 0.25 and the point where more load would stop adding force (at most 4). A loaded
+	/// tire grips less per newton, so moving weight onto one axle (anti-roll bars, springs, the center
+	/// of mass) costs that axle grip and shifts the balance. Road tires sit around 0.1 to 0.25 (a tire
+	/// at twice its reference load then grips 10-25% less per newton). 0 is off: grip is proportional
+	/// to the load. At most 1.
+	float loadSensitivity;
+
+	/// The load at which the friction coefficients above apply (N). 0 uses the wheel's static load,
+	/// so a car standing still grips as its coefficients say and only the weight transfer changes.
+	float referenceLoad;
 } b3WheeledVehicleTire;
 
 /// Wheel definition
