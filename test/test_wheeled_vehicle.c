@@ -1843,6 +1843,35 @@ static int TurboTest( void )
 	return 0;
 }
 
+// A car on its roof must right itself: dropped tilted, dropped dead level, and placed level at
+// rest. Level, the roll from upright is about pi and its sign, which picks the side to roll toward,
+// flips from step to step. At rest, the car must not fall asleep before the stuck timer fires.
+static int LevelRoofTest( void )
+{
+	for ( int scenario = 0; scenario < 3; ++scenario )
+	{
+		b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+		CreateFlatGround( worldId );
+		float angle = scenario == 0 ? B3_PI - 0.1f : B3_PI;
+		float height = scenario == 2 ? 0.3f : 0.35f;
+		b3Quat rotation = b3MakeQuatFromAxisAngle( b3Vec3_axisZ, angle );
+		b3BodyId chassisId = CreateChassis( worldId, (b3Pos){ 0.0f, height, 0.0f }, rotation );
+		b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+		def.chassisId = chassisId;
+		def.assists.selfRighting = 6.0f;
+		b3WheeledVehicleId wheeledVehicleId = b3CreateWheeledVehicle( worldId, &def );
+		ENSURE( b3WheeledVehicle_IsValid( wheeledVehicleId ) );
+
+		Step( worldId, 360 );
+		b3Vec3 up = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisY );
+		ENSURE( up.y > 0.8f );
+		ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
+
+		b3DestroyWorld( worldId );
+	}
+	return 0;
+}
+
 int WheeledVehicleTest( void )
 {
 	RUN_SUBTEST( RideHeightTest );
@@ -1871,5 +1900,6 @@ int WheeledVehicleTest( void )
 	RUN_SUBTEST( MeshMaterialTest );
 	RUN_SUBTEST( TouchdownBrakeTest );
 	RUN_SUBTEST( TurboTest );
+	RUN_SUBTEST( LevelRoofTest );
 	return 0;
 }
