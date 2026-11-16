@@ -821,8 +821,8 @@ static void b3DestroyMergeContext( b3MergeContext* ctx, int pieceCount )
 
 b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 {
-	if ( def->meshVertices == NULL || def->meshIndices == NULL || def->meshVertexCount < 3 ||
-		 def->meshTriangleCount < 1 )
+	if ( def == NULL || def->meshVertices == NULL || def->meshIndices == NULL ||
+		 def->meshVertexCount < 3 || def->meshTriangleCount < 1 )
 	{
 		return NULL;
 	}

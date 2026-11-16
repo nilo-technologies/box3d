@@ -340,7 +340,8 @@ static int MergeDropsDegeneratePiece( void )
 	return 0;
 }
 
-// The vertex limit holds for every merged hull.
+// The vertex limit holds for every merged hull. Six is under the eight corners of each box and
+// of the wall they merge into, so both the pieces and the merged hull have to be simplified.
 static int MergeRespectsVertexLimit( void )
 {
 	WallMesh wall;
@@ -349,13 +350,23 @@ static int MergeRespectsVertexLimit( void )
 	MakePieces( &pieces );
 
 	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
-	def.maxHullVertices = 8;
+	def.maxHullVertices = 6;
 	def.maxHullCount = 1;
 	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
 	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 1 );
+	ENSURE( result->offsets[1] - result->offsets[0] <= 6 );
+	ENSURE( result->offsets[1] - result->offsets[0] >= 4 );
+	b3DestroyConvexMergeResult( result );
+
+	// Without a budget the limit applies to whatever hulls remain
+	def.maxHullCount = 0;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount >= 1 );
 	for ( int i = 0; i < result->pieceCount; ++i )
 	{
-		ENSURE( result->offsets[i + 1] - result->offsets[i] <= 8 );
+		ENSURE( result->offsets[i + 1] - result->offsets[i] <= 6 );
 		ENSURE( result->offsets[i + 1] - result->offsets[i] >= 4 );
 	}
 
@@ -371,6 +382,8 @@ static int MergeRejectsBadInput( void )
 	MakePieces( &pieces );
 
 	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
+
+	ENSURE( b3MergeConvexPieces( NULL ) == NULL );
 
 	b3ConvexMergeDef bad = def;
 	bad.meshVertices = NULL;
@@ -425,6 +438,11 @@ static int MergeIsRepeatable( void )
 	for ( int i = 0; i <= first->pieceCount; ++i )
 	{
 		ENSURE( first->offsets[i] == second->offsets[i] );
+	}
+
+	for ( int i = 0; i < first->pieceCount; ++i )
+	{
+		ENSURE( first->concavities[i] == second->concavities[i] );
 	}
 
 	for ( int i = 0; i < first->offsets[first->pieceCount]; ++i )

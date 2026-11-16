@@ -141,10 +141,16 @@ def.meshTriangleCount = meshTriangleCount;
 def.piecePoints = piecePoints;        // all pieces back to back
 def.pieceOffsets = pieceOffsets;      // pieceCount + 1 offsets into piecePoints
 def.pieceCount = pieceCount;
-def.maxConcavity = 0.05f;             // a hull may seal 5 cm of open space
+def.maxConcavity = 0.05f * b3GetLengthUnitsPerMeter(); // a hull may seal 5 cm of open space
 def.maxHullCount = 32;                // optional budget, 0 for none
 
 b3ConvexMergeResult* result = b3MergeConvexPieces(&def);
+if (result == NULL)
+{
+    // invalid definition: a missing array, a triangle index past the vertices,
+    // offsets that run backwards, or a mesh with no extent
+    return;
+}
 for (int i = 0; i < result->pieceCount; ++i)
 {
     const b3Vec3* points = result->points + result->offsets[i];
