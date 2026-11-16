@@ -33,6 +33,7 @@ extern int BroadPhaseTest( void );
 extern int CollisionTest( void );
 extern int CompoundTest( void );
 extern int ContainerTest( void );
+extern int ConvexMergeTest( void );
 extern int DeterminismTest( void );
 extern int DistanceTest( void );
 extern int DynamicTreeTest( void );
@@ -112,6 +113,7 @@ int main( int argc, char** argv )
 	MAYBE_RUN_TEST( CollisionTest );
 	MAYBE_RUN_TEST( CompoundTest );
 	MAYBE_RUN_TEST( ContainerTest );
+	MAYBE_RUN_TEST( ConvexMergeTest );
 	MAYBE_RUN_TEST( DeterminismTest );
 	MAYBE_RUN_TEST( DistanceTest );
 	MAYBE_RUN_TEST( DynamicTreeTest );

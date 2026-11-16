@@ -124,6 +124,50 @@ Hulls created with `b3CreateCylinder`, `b3CreateCone`, and `b3CreateHull` are
 heap-allocated and must be freed with `b3DestroyHull`. `b3BoxHull` values are
 stack/struct-allocated and must not be freed.
 
+#### Merging Convex Pieces
+
+A concave object collides as a set of convex hulls. A volumetric convex decomposition
+such as V-HACD cuts the object into many small convex pieces and then merges them down
+to a hull budget by volume. An opening is cheap in volume, so that merge can close a
+doorway or a window. `b3MergeConvexPieces` merges the pieces against the source mesh
+instead, and stops before a merged hull seals open space deeper than `maxConcavity`:
+
+```c
+b3ConvexMergeDef def = b3DefaultConvexMergeDef();
+def.meshVertices = meshVertices;      // the mesh the pieces were cut from
+def.meshIndices = meshIndices;
+def.meshVertexCount = meshVertexCount;
+def.meshTriangleCount = meshTriangleCount;
+def.piecePoints = piecePoints;        // all pieces back to back
+def.pieceOffsets = pieceOffsets;      // pieceCount + 1 offsets into piecePoints
+def.pieceCount = pieceCount;
+def.maxConcavity = 0.05f;             // a hull may seal 5 cm of open space
+def.maxHullCount = 32;                // optional budget, 0 for none
+
+b3ConvexMergeResult* result = b3MergeConvexPieces(&def);
+for (int i = 0; i < result->pieceCount; ++i)
+{
+    const b3Vec3* points = result->points + result->offsets[i];
+    int count = result->offsets[i + 1] - result->offsets[i];
+    b3HullData* hull = b3CreateHull(points, count, count);
+    // ...
+}
+b3DestroyConvexMergeResult(result);
+```
+
+The cost of a merge is measured on the source surface. Sample points are spread over the
+triangles and a ray is cast outward from each. A ray that starts inside the merged hull
+runs through open space until it leaves the hull or reenters the mesh, and that run is the
+depth the hull seals there. The run is capped at twice the farthest the ray gets from the
+surface, so a doorway reads as its width while a sliver of hull lying against a wall reads
+as its thickness. Neighboring pieces merge cheapest first, the way HACD collapses the
+edges of its dual graph.
+
+Give the decomposition a generous hull budget so it hands over its pieces unmerged, then
+let `maxConcavity` decide how many hulls remain. With `maxHullCount` set, merging
+continues past the limit until the budget is met, and `result->maxConcavity` reports what
+that cost. The source mesh should be closed. Either winding works.
+
 ### Triangle Meshes
 
 Triangle meshes let you describe concave or open surfaces using a triangle soup.

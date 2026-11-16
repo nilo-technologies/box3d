@@ -2308,6 +2308,72 @@ typedef struct b3BoxHull
 	float edgeCosines[12];		 ///< dot(n1, n2) for each full edge.
 } b3BoxHull;
 
+/// Input for b3MergeConvexPieces. No pointers are held after the call, so all this data can be temporary.
+typedef struct b3ConvexMergeDef
+{
+	/// Vertices of the source triangle mesh the pieces were cut from.
+	const b3Vec3* meshVertices;
+
+	/// Triangle vertex indices of the source mesh, 3 for each triangle. The mesh should be closed and
+	/// wound one way. Either winding works, the outward side is found from the signed volume.
+	const int32_t* meshIndices;
+
+	/// Points of the convex pieces, all pieces back to back.
+	const b3Vec3* piecePoints;
+
+	/// Where each piece starts in piecePoints. There are pieceCount + 1 offsets, piece i owns the
+	/// points [pieceOffsets[i], pieceOffsets[i + 1]).
+	const int32_t* pieceOffsets;
+
+	/// The source mesh vertex count. Must be 3 or more.
+	int meshVertexCount;
+
+	/// The source mesh triangle count. Must be 1 or more.
+	int meshTriangleCount;
+
+	/// The piece count. Must be 1 or more.
+	int pieceCount;
+
+	/// The deepest open space a merged hull may seal, in length units. This is how far a hull may
+	/// reach past the source surface along the surface normal, for example across a doorway.
+	/// A piece that arrives over this limit may still merge while that makes it no worse.
+	float maxConcavity;
+
+	/// Hull budget. Use 0 for no budget: merging then stops at maxConcavity alone. With a budget
+	/// merging continues past maxConcavity, cheapest merge first, until this many hulls remain.
+	int maxHullCount;
+
+	/// Vertex limit for each merged hull. Clamped to [4, B3_MAX_HULL_VERTICES].
+	int maxHullVertices;
+
+	/// Number of sample points spread over the source surface. More samples see thinner openings
+	/// and cost more time.
+	int sampleCount;
+} b3ConvexMergeDef;
+
+/// Output of b3MergeConvexPieces. Destroy it with b3DestroyConvexMergeResult.
+/// @note This data structure has data hanging off the end and cannot be directly copied.
+typedef struct b3ConvexMergeResult
+{
+	/// Points of the merged hulls, all hulls back to back.
+	b3Vec3* points;
+
+	/// Where each hull starts in points. There are pieceCount + 1 offsets.
+	int32_t* offsets;
+
+	/// The depth of open space each hull seals, in length units. One per hull.
+	float* concavities;
+
+	/// The merged hull count.
+	int pieceCount;
+
+	/// The largest value in concavities.
+	float maxConcavity;
+
+	/// The total number of bytes for this result.
+	int byteCount;
+} b3ConvexMergeResult;
+
 /**@}*/ // hull
 
 /**
