@@ -88,7 +88,8 @@ typedef struct b3MergeCandidate
 	// Merge order. See b3ScoreMerge.
 	float cost;
 
-	// Concavity of the merged hull. Not computed past the limit of the pair.
+	// Concavity of the merged hull. Without a hull budget it is not computed past the limit of
+	// the pair, since such a merge can never happen.
 	float concavity;
 
 	// Volume the merged hull adds over its two parts. Breaks ties between equal costs.
@@ -135,9 +136,6 @@ typedef struct b3MergeContext
 	float tolerance;
 	int maxHullVertices;
 	bool hasBudget;
-
-	// Set once merging continues past the limit to meet the hull budget
-	bool forced;
 } b3MergeContext;
 
 b3ConvexMergeDef b3DefaultConvexMergeDef( void )
@@ -655,17 +653,6 @@ static b3MergeCandidate b3PopCandidate( b3MergeContext* ctx )
 	return top;
 }
 
-// Restore heap order after entries changed in place
-static void b3HeapifyCandidates( b3MergeContext* ctx )
-{
-	int count = ctx->heapCount;
-	ctx->heapCount = 0;
-	for ( int i = 0; i < count; ++i )
-	{
-		b3PushCandidate( ctx, ctx->heap[i] );
-	}
-}
-
 // The hull two nodes would become
 static b3HullData* b3CreateMergedHull( b3MergeContext* ctx, const b3MergeNode* nodeA,
 									   const b3MergeNode* nodeB )
@@ -678,18 +665,13 @@ static b3HullData* b3CreateMergedHull( b3MergeContext* ctx, const b3MergeNode* n
 	return b3CreateHull( ctx->scratch, countA + countB, ctx->maxHullVertices );
 }
 
-// Merge order. A merge within the limit of its pair is ranked by concavity, counted in sixteenths
-// of the limit so pairs that are equally harmless tie, and the tie goes to the pair that wastes
-// the least volume. A merge over the limit only happens to meet a hull budget. Those all share
-// one cost and are ranked by wasted volume alone, the way V-HACD ranks its merges.
+// Merge order: the concavity of the merged hull, counted in sixteenths of the limit so pairs
+// that are about equally harmless tie, and the tie goes to the pair that wastes the least
+// volume. A merge within the limit of its pair never costs more than maxConcavity, and one
+// over the limit always does. Those only happen to meet a hull budget.
 static float b3ScoreMerge( const b3MergeContext* ctx, float concavity, float limit )
 {
-	if ( concavity > limit )
-	{
-		return FLT_MAX;
-	}
-
-	float cost = b3MinFloat( concavity, ctx->maxConcavity );
+	float cost = concavity <= limit ? b3MinFloat( concavity, ctx->maxConcavity ) : concavity;
 	float bucket = ctx->maxConcavity / 16.0f;
 	return bucket > 0.0f ? bucket * ceilf( cost / bucket ) : cost;
 }
@@ -713,9 +695,8 @@ static void b3QueueEstimate( b3MergeContext* ctx, int indexA, int indexB, float 
 	candidate.concavity = concavity;
 	candidate.cost = b3ScoreMerge( ctx, concavity, b3GetMergeLimit( ctx, nodeA, nodeB ) );
 
-	// Within the limit the volume only breaks ties, so a guess carried over from the parts will do.
-	// Forced merges are ranked by volume alone, there every pair is priced before any is merged.
-	candidate.growth = ctx->forced ? -FLT_MAX : growth;
+	// The volume only breaks ties, so a guess carried over from the parts will do
+	candidate.growth = growth;
 	candidate.nodeA = indexA;
 	candidate.nodeB = indexB;
 	candidate.versionA = nodeA->version;
@@ -723,7 +704,7 @@ static void b3QueueEstimate( b3MergeContext* ctx, int indexA, int indexB, float 
 	candidate.exact = false;
 
 	// Without a hull budget a merge over the limit can never happen
-	if ( candidate.cost == FLT_MAX && ctx->hasBudget == false )
+	if ( candidate.cost > ctx->maxConcavity && ctx->hasBudget == false )
 	{
 		return;
 	}
@@ -744,14 +725,10 @@ static void b3PriceCandidate( b3MergeContext* ctx, b3MergeCandidate candidate )
 		return;
 	}
 
-	// A pair already known to be over its limit is not measured again, only its volume matters
+	// With a hull budget a merge over the limit may still happen, so it is measured in full
 	float limit = b3GetMergeLimit( ctx, nodeA, nodeB );
-	if ( candidate.cost != FLT_MAX )
-	{
-		candidate.concavity = b3ComputeHullConcavity( ctx, merged, limit );
-		candidate.cost = b3ScoreMerge( ctx, candidate.concavity, limit );
-	}
-
+	candidate.concavity = b3ComputeHullConcavity( ctx, merged, ctx->hasBudget ? FLT_MAX : limit );
+	candidate.cost = b3ScoreMerge( ctx, candidate.concavity, limit );
 	candidate.growth = merged->volume - nodeA->hull->volume - nodeB->hull->volume;
 	candidate.exact = true;
 	b3DestroyHull( merged );
@@ -759,7 +736,7 @@ static void b3PriceCandidate( b3MergeContext* ctx, b3MergeCandidate candidate )
 	b3SetLink( nodeA, candidate.nodeB, candidate.concavity, candidate.growth );
 	b3SetLink( nodeB, candidate.nodeA, candidate.concavity, candidate.growth );
 
-	if ( candidate.cost == FLT_MAX && ctx->hasBudget == false )
+	if ( candidate.cost > ctx->maxConcavity && ctx->hasBudget == false )
 	{
 		return;
 	}
@@ -781,12 +758,7 @@ static void b3MergeNodes( b3MergeContext* ctx, const b3MergeCandidate* candidate
 		return;
 	}
 
-	// A merge forced by the hull budget was not measured past its limit
 	float concavity = candidate->concavity;
-	if ( candidate->cost == FLT_MAX )
-	{
-		concavity = b3ComputeHullConcavity( ctx, merged, FLT_MAX );
-	}
 
 	b3DestroyHull( nodeA->hull );
 	b3DestroyHull( nodeB->hull );
@@ -976,35 +948,12 @@ b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 			continue;
 		}
 
-		// Over the limit everything left in the queue is over the limit too, estimates included
+		// Over the limit everything left in the queue is over the limit too, estimates included,
+		// and only a hull budget still to be met keeps the merging going.
 		bool overBudget = ctx.hasBudget && ctx.aliveCount > def->maxHullCount;
-		if ( candidate.cost == FLT_MAX && overBudget == false )
+		if ( candidate.cost > ctx.maxConcavity && overBudget == false )
 		{
 			break;
-		}
-
-		if ( candidate.cost == FLT_MAX && ctx.forced == false )
-		{
-			// The queue now holds only merges over the limit, and from here they are ranked by
-			// volume. Send every guess to the front so it is priced first. They all share one
-			// cost, so moving entries to the lowest volume keeps the heap in order.
-			ctx.forced = true;
-			for ( int i = 0; i < ctx.heapCount; ++i )
-			{
-				if ( ctx.heap[i].exact == false )
-				{
-					ctx.heap[i].growth = -FLT_MAX;
-				}
-			}
-
-			b3HeapifyCandidates( &ctx );
-			if ( candidate.exact == false )
-			{
-				candidate.growth = -FLT_MAX;
-			}
-
-			b3PushCandidate( &ctx, candidate );
-			continue;
 		}
 
 		if ( candidate.exact == false )
