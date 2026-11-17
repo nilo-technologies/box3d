@@ -256,18 +256,11 @@ B3_API b3ConvexMergeDef b3DefaultConvexMergeDef( void );
 /// the merged hull would seal. That depth is measured with rays cast outward from sample points on
 /// the source triangles. A volumetric decomposition such as V-HACD merges by volume and can close a
 /// doorway or a window to meet its hull budget. Feed it a generous budget and merge the pieces here.
+/// By default the limit on that depth is found by a sweep: the pieces are merged at a series of
+/// loosening limits in one pass and the step with the best trade between few hulls and little
+/// sealed is returned. See b3ConvexMergeDef::enableSweep.
 /// Returns NULL if the definition is invalid.
 B3_API b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def );
-
-/// Merge the same pieces at a series of limits in one pass, to see how the hull count falls as
-/// the limit loosens. The limits must not decrease. Each one carries on from the hulls the one
-/// before left, so the whole series costs little more than a single merge at the loosest limit,
-/// and the hull counts never rise along it. results receives one result per limit, each destroyed
-/// with b3DestroyConvexMergeResult. def->maxConcavity is not used. A hull budget in
-/// def->maxHullCount applies at every limit.
-/// Returns false, with results untouched, if the definition or the limits are invalid.
-B3_API bool b3SweepConvexPieces( const b3ConvexMergeDef* def, const float* maxConcavities, int count,
-								 b3ConvexMergeResult** results );
 
 /// Destroy a convex merge result.
 B3_API void b3DestroyConvexMergeResult( b3ConvexMergeResult* result );

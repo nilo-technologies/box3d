@@ -2337,10 +2337,22 @@ typedef struct b3ConvexMergeDef
 	/// The deepest open space a merged hull may seal, in length units. This is how far a hull may
 	/// reach past the source surface along the surface normal, for example across a doorway.
 	/// A piece that arrives over this limit may still merge while that makes it no worse.
+	/// With enableSweep this is the loosest limit the sweep tries, and 0 stands for 8% of the
+	/// diagonal of the mesh bounds. Without it this is the limit, and 0 only merges what seals
+	/// nothing.
 	float maxConcavity;
 
-	/// Hull budget. Use 0 for no budget: merging then stops at maxConcavity alone. With a budget
-	/// merging continues past maxConcavity, cheapest merge first, until this many hulls remain.
+	/// The tightest limit the sweep tries, in length units. Use 0 for 0.5% of the diagonal of the
+	/// mesh bounds. A value above maxConcavity is lowered to it. Not used without enableSweep.
+	float minConcavity;
+
+	/// How the sweep weighs hulls against sealed depth when it chooses a step. Above 1 leans
+	/// toward fewer hulls, below 1 toward a closer fit. Not used without enableSweep.
+	float hullWeight;
+
+	/// Hull budget. Use 0 for no budget: merging then stops at the limit alone. With a budget
+	/// merging continues past the limit, cheapest merge first, until this many hulls remain. A
+	/// sweep meets the budget at every step.
 	int maxHullCount;
 
 	/// Vertex limit for each merged hull. Clamped to [4, B3_MAX_HULL_VERTICES].
@@ -2349,7 +2361,33 @@ typedef struct b3ConvexMergeDef
 	/// Number of sample points spread over the source surface. More samples see thinner openings
 	/// and cost more time.
 	int sampleCount;
+
+	/// The number of limits the sweep tries, spread geometrically from minConcavity to
+	/// maxConcavity. Clamped to [1, 64]. Not used without enableSweep.
+	int sweepSteps;
+
+	/// Find the limit instead of taking it. How many hulls a mesh needs depends on the limit, and
+	/// the right limit is rarely known up front. With this on the pieces are merged at a series
+	/// of loosening limits, each carrying on from the hulls the one before left, and the result
+	/// is the step with the best trade between few hulls and little sealed. The whole series
+	/// costs little more than a single merge at the loosest limit. With this off the pieces are
+	/// merged once, to maxConcavity.
+	bool enableSweep;
 } b3ConvexMergeDef;
+
+/// One limit b3MergeConvexPieces merged to.
+typedef struct b3ConvexMergeStep
+{
+	/// The limit, in length units.
+	float maxConcavity;
+
+	/// The deepest open space the hulls sealed at this limit, in length units. It can sit above
+	/// the limit where the pieces already sealed more, or a hull budget forced merges.
+	float sealedDepth;
+
+	/// The hulls left at this limit.
+	int hullCount;
+} b3ConvexMergeStep;
 
 /// Output of b3MergeConvexPieces. Destroy it with b3DestroyConvexMergeResult.
 /// @note This data structure has data hanging off the end and cannot be directly copied.
@@ -2364,11 +2402,23 @@ typedef struct b3ConvexMergeResult
 	/// The depth of open space each hull seals, in length units. One per hull.
 	float* concavities;
 
+	/// The limits merged to, tightest first: every limit of a sweep, or the one limit without it.
+	/// The hull count never rises along them.
+	b3ConvexMergeStep* steps;
+
 	/// The merged hull count.
 	int pieceCount;
 
 	/// The largest value in concavities.
 	float maxConcavity;
+
+	/// The number of steps.
+	int stepCount;
+
+	/// The step these hulls are from. A sweep chooses it: hull count and sealed depth are each
+	/// scaled by their largest value over the steps, and the step nearest to no hulls and nothing
+	/// sealed wins.
+	int bestStep;
 
 	/// The total number of bytes for this result.
 	int byteCount;

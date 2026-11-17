@@ -130,7 +130,7 @@ A concave object collides as a set of convex hulls. A volumetric convex decompos
 such as V-HACD cuts the object into many small convex pieces and then merges them down
 to a hull budget by volume. An opening is cheap in volume, so that merge can close a
 doorway or a window. `b3MergeConvexPieces` merges the pieces against the source mesh
-instead, and stops before a merged hull seals open space deeper than `maxConcavity`:
+instead, so a merged hull only seals as much open space as its limit allows:
 
 ```c
 b3ConvexMergeDef def = b3DefaultConvexMergeDef();
@@ -141,8 +141,6 @@ def.meshTriangleCount = meshTriangleCount;
 def.piecePoints = piecePoints;        // all pieces back to back
 def.pieceOffsets = pieceOffsets;      // pieceCount + 1 offsets into piecePoints
 def.pieceCount = pieceCount;
-def.maxConcavity = 0.05f * b3GetLengthUnitsPerMeter(); // a hull may seal 5 cm of open space
-def.maxHullCount = 32;                // optional budget, 0 for none
 
 b3ConvexMergeResult* result = b3MergeConvexPieces(&def);
 if (result == NULL)
@@ -169,32 +167,50 @@ surface, so a doorway reads as its width while a sliver of hull lying against a 
 as its thickness. Neighboring pieces merge cheapest first, the way HACD collapses the
 edges of its dual graph.
 
-Give the decomposition a generous hull budget so it hands over its pieces unmerged, then
-let `maxConcavity` decide how many hulls remain. With `maxHullCount` set, merging
-continues past the limit until the budget is met, and `result->maxConcavity` reports what
-that cost. The source mesh should be closed. Either winding works.
-
-How many hulls a mesh needs depends on the limit, and the right limit is rarely known up
-front. `b3SweepConvexPieces` merges the same pieces at a series of loosening limits in one
-pass and returns a result for each, so the hull count can be read against the limit:
+How many hulls a mesh needs depends on the limit on that depth, and the right limit is
+rarely known up front. By default the merge finds it with a sweep (`enableSweep`): the
+pieces are merged at a series of loosening limits, and the step with the best trade
+between few hulls and little sealed is returned. Each limit carries on from the hulls the
+one before left. The samples and the neighbor graph are built once, so the whole series
+costs little more than a single merge at the loosest limit, and the hull count never rises
+along it.
 
 ```c
-float units = b3GetLengthUnitsPerMeter();
-float limits[] = { 0.02f * units, 0.05f * units, 0.1f * units, 0.2f * units };   // must not decrease
-b3ConvexMergeResult* results[4];
-if (b3SweepConvexPieces(&def, limits, 4, results))
+def.minConcavity = 0.0f;  // tightest limit, 0 for 0.5% of the diagonal of the mesh bounds
+def.maxConcavity = 0.0f;  // loosest limit, 0 for 8% of the diagonal
+def.sweepSteps = 9;       // limits, spread geometrically between the two
+def.hullWeight = 1.0f;    // above 1 leans toward fewer hulls, below 1 toward a closer fit
+```
+
+The result says what the sweep saw. `result->steps` has the limit, the hull count and the
+sealed depth of each step, and `result->bestStep` is the one the hulls are from:
+
+```c
+for (int i = 0; i < result->stepCount; ++i)
 {
-    for (int i = 0; i < 4; ++i)
-    {
-        // results[i]->pieceCount hulls seal at most results[i]->maxConcavity
-        b3DestroyConvexMergeResult(results[i]);
-    }
+    const b3ConvexMergeStep* step = result->steps + i;
+    // step->hullCount hulls seal step->sealedDepth at a limit of step->maxConcavity
 }
 ```
 
-Each limit carries on from the hulls the one before left. The samples and the neighbor
-graph are built once, so the whole series costs little more than a single merge at the
-loosest limit, and the hull count never rises along it.
+The chosen step is a heuristic. Hull count and sealed depth are each scaled by their
+largest value over the steps, and the step nearest to no hulls and nothing sealed wins. It
+moves with the range swept, and it is not the fewest hulls possible: the merge is greedy
+and can only join the pieces it was given.
+
+To merge to a limit of your own, turn the sweep off. `maxConcavity` is then the limit:
+
+```c
+def.enableSweep = false;
+def.maxConcavity = 0.05f * b3GetLengthUnitsPerMeter(); // a hull may seal 5 cm of open space
+def.maxHullCount = 32;                                 // optional budget, 0 for none
+```
+
+Give the decomposition a generous hull budget so it hands over its pieces unmerged, then
+let the limit decide how many hulls remain. With `maxHullCount` set, merging continues
+past the limit until the budget is met, at every step of a sweep, and
+`result->maxConcavity` reports what that cost. The source mesh should be closed. Either
+winding works.
 
 ### Triangle Meshes
 

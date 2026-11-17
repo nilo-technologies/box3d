@@ -110,7 +110,8 @@ static void MakePieces( WallPieces* pieces )
 	pieces->offsets[PIECE_COUNT] = 8 * PIECE_COUNT;
 }
 
-static b3ConvexMergeDef MakeWallDef( const WallMesh* wall, const WallPieces* pieces )
+// The wall with the defaults: the limit is found by a sweep
+static b3ConvexMergeDef MakeSweepDef( const WallMesh* wall, const WallPieces* pieces )
 {
 	b3ConvexMergeDef def = b3DefaultConvexMergeDef();
 	def.meshVertices = wall->vertices;
@@ -120,8 +121,51 @@ static b3ConvexMergeDef MakeWallDef( const WallMesh* wall, const WallPieces* pie
 	def.piecePoints = pieces->points;
 	def.pieceOffsets = pieces->offsets;
 	def.pieceCount = PIECE_COUNT;
+	return def;
+}
+
+// The wall merged once, to a limit of 5 cm
+static b3ConvexMergeDef MakeWallDef( const WallMesh* wall, const WallPieces* pieces )
+{
+	b3ConvexMergeDef def = MakeSweepDef( wall, pieces );
+	def.enableSweep = false;
 	def.maxConcavity = 0.05f;
 	return def;
+}
+
+static bool IsSameResult( const b3ConvexMergeResult* a, const b3ConvexMergeResult* b )
+{
+	if ( a->pieceCount != b->pieceCount || a->maxConcavity != b->maxConcavity )
+	{
+		return false;
+	}
+
+	for ( int i = 0; i <= a->pieceCount; ++i )
+	{
+		if ( a->offsets[i] != b->offsets[i] )
+		{
+			return false;
+		}
+	}
+
+	for ( int i = 0; i < a->pieceCount; ++i )
+	{
+		if ( a->concavities[i] != b->concavities[i] )
+		{
+			return false;
+		}
+	}
+
+	for ( int i = 0; i < a->offsets[a->pieceCount]; ++i )
+	{
+		if ( a->points[i].x != b->points[i].x || a->points[i].y != b->points[i].y ||
+			 a->points[i].z != b->points[i].z )
+		{
+			return false;
+		}
+	}
+
+	return true;
 }
 
 // Is the point inside one of the merged hulls?
@@ -199,6 +243,13 @@ static int MergeKeepsDoorwayOpen( void )
 
 	// Wall volume: 4 x 3 x 0.3 less the doorway 1 x 2.1 x 0.3
 	ENSURE_SMALL( GetVolume( result ) - 2.97f, 1e-3f );
+
+	// Without a sweep the one limit is the one step
+	ENSURE( result->stepCount == 1 );
+	ENSURE( result->bestStep == 0 );
+	ENSURE( result->steps[0].maxConcavity == 0.05f );
+	ENSURE( result->steps[0].hullCount == 3 );
+	ENSURE( result->steps[0].sealedDepth == result->maxConcavity );
 
 	b3DestroyConvexMergeResult( result );
 	return 0;
@@ -434,33 +485,65 @@ static int MergeIsRepeatable( void )
 	b3ConvexMergeResult* first = b3MergeConvexPieces( &def );
 	b3ConvexMergeResult* second = b3MergeConvexPieces( &def );
 	ENSURE( first != NULL && second != NULL );
-	ENSURE( first->pieceCount == second->pieceCount );
-	ENSURE( first->maxConcavity == second->maxConcavity );
-	for ( int i = 0; i <= first->pieceCount; ++i )
-	{
-		ENSURE( first->offsets[i] == second->offsets[i] );
-	}
-
-	for ( int i = 0; i < first->pieceCount; ++i )
-	{
-		ENSURE( first->concavities[i] == second->concavities[i] );
-	}
-
-	for ( int i = 0; i < first->offsets[first->pieceCount]; ++i )
-	{
-		ENSURE( first->points[i].x == second->points[i].x );
-		ENSURE( first->points[i].y == second->points[i].y );
-		ENSURE( first->points[i].z == second->points[i].z );
-	}
+	ENSURE( IsSameResult( first, second ) );
 
 	b3DestroyConvexMergeResult( first );
 	b3DestroyConvexMergeResult( second );
 	return 0;
 }
 
-// A sweep merges at a series of loosening limits in one pass. Each step matches or undercuts the
-// hull count of the one before, and stays within its own limit.
-static int SweepLoosensStepByStep( void )
+// The default is a sweep: nine limits spread over a range that follows the size of the mesh, the
+// hull count never rising along them, and one step chosen.
+static int SweepIsTheDefault( void )
+{
+	b3ConvexMergeDef defaults = b3DefaultConvexMergeDef();
+	ENSURE( defaults.enableSweep );
+	ENSURE( defaults.sweepSteps == 9 );
+	ENSURE( defaults.hullWeight == 1.0f );
+	ENSURE( defaults.minConcavity == 0.0f && defaults.maxConcavity == 0.0f );
+
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	b3ConvexMergeDef def = MakeSweepDef( &wall, &pieces );
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 9 );
+
+	// 0.5% to 8% of the diagonal of the wall, each limit 1.41 times the one before
+	float diagonal = sqrtf( 4.0f * 4.0f + 3.0f * 3.0f + 0.3f * 0.3f );
+	ENSURE_SMALL( result->steps[0].maxConcavity - 0.005f * diagonal, 1e-5f );
+	ENSURE_SMALL( result->steps[8].maxConcavity - 0.08f * diagonal, 1e-5f );
+	for ( int i = 1; i < result->stepCount; ++i )
+	{
+		ENSURE_SMALL( result->steps[i].maxConcavity / result->steps[i - 1].maxConcavity -
+						  sqrtf( 2.0f ),
+					  1e-3f );
+		ENSURE( result->steps[i].hullCount <= result->steps[i - 1].hullCount );
+		ENSURE( result->steps[i].sealedDepth >= result->steps[i - 1].sealedDepth );
+	}
+
+	// The hulls are those of the chosen step, the first at its hull count
+	ENSURE( result->bestStep >= 0 && result->bestStep < result->stepCount );
+	ENSURE( result->pieceCount == result->steps[result->bestStep].hullCount );
+	ENSURE( result->maxConcavity == result->steps[result->bestStep].sealedDepth );
+	ENSURE( result->bestStep == 0 || result->steps[result->bestStep].hullCount <
+										 result->steps[result->bestStep - 1].hullCount );
+
+	// The doorway is 1 wide and the sweep stops at 40 cm: it stays open
+	ENSURE( result->pieceCount == 3 );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ -1.2f, 1.0f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+
+	b3DestroyConvexMergeResult( result );
+	return 0;
+}
+
+// A sweep of one step, and the first step of any sweep, are the merge at that limit alone, hull
+// for hull.
+static int SweepStartsAsOneMerge( void )
 {
 	WallMesh wall;
 	WallPieces pieces;
@@ -468,51 +551,155 @@ static int SweepLoosensStepByStep( void )
 	MakePieces( &pieces );
 
 	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
-	const float limits[4] = { 0.0f, 0.05f, 0.5f, 1.5f };
-	b3ConvexMergeResult* results[4] = { NULL, NULL, NULL, NULL };
-	ENSURE( b3SweepConvexPieces( &def, limits, 4, results ) );
-
-	for ( int i = 0; i < 4; ++i )
-	{
-		ENSURE( results[i] != NULL );
-		ENSURE( results[i]->pieceCount >= 1 );
-		ENSURE( results[i]->maxConcavity <= limits[i] + 1e-3f );
-		if ( i > 0 )
-		{
-			ENSURE( results[i]->pieceCount <= results[i - 1]->pieceCount );
-		}
-	}
-
-	// The doorway is 1 wide: it stays open up to half a meter and closes at 1.5
-	ENSURE( results[0]->pieceCount == 3 );
-	ENSURE( results[1]->pieceCount == 3 );
-	ENSURE( IsCovered( results[2], ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
-	ENSURE( results[3]->pieceCount == 1 );
-	ENSURE( IsCovered( results[3], ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) );
-
-	// The first step is the merge at that limit alone, hull for hull
-	def.maxConcavity = limits[0];
 	b3ConvexMergeResult* single = b3MergeConvexPieces( &def );
 	ENSURE( single != NULL );
-	ENSURE( single->pieceCount == results[0]->pieceCount );
-	for ( int i = 0; i <= single->pieceCount; ++i )
-	{
-		ENSURE( single->offsets[i] == results[0]->offsets[i] );
-	}
 
-	for ( int i = 0; i < single->offsets[single->pieceCount]; ++i )
-	{
-		ENSURE( single->points[i].x == results[0]->points[i].x );
-		ENSURE( single->points[i].y == results[0]->points[i].y );
-		ENSURE( single->points[i].z == results[0]->points[i].z );
-	}
+	b3ConvexMergeDef sweep = MakeSweepDef( &wall, &pieces );
+	sweep.maxConcavity = 0.05f;
+	sweep.sweepSteps = 1;
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &sweep );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 1 );
+	ENSURE( result->steps[0].maxConcavity == 0.05f );
+	ENSURE( IsSameResult( single, result ) );
+	b3DestroyConvexMergeResult( result );
+
+	// A weight that only cares for the fit keeps the first step
+	sweep.minConcavity = 0.05f;
+	sweep.maxConcavity = 1.5f;
+	sweep.sweepSteps = 4;
+	sweep.hullWeight = 0.001f;
+	result = b3MergeConvexPieces( &sweep );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 4 );
+	ENSURE( result->bestStep == 0 );
+	ENSURE( result->steps[0].maxConcavity == 0.05f );
+	ENSURE( IsSameResult( single, result ) );
+	b3DestroyConvexMergeResult( result );
 
 	b3DestroyConvexMergeResult( single );
-	for ( int i = 0; i < 4; ++i )
+	return 0;
+}
+
+// The range and the weight are the definition's to give. A limit as wide as the doorway lets the
+// last step close it, and the weight decides whether that step is the one returned.
+static int SweepFollowsRangeAndWeight( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	b3ConvexMergeDef def = MakeSweepDef( &wall, &pieces );
+	def.minConcavity = 0.5f;
+	def.maxConcavity = 1.5f;
+	def.sweepSteps = 3;
+
+	// Fewer hulls at any cost: the one hull that seals the doorway
+	def.hullWeight = 100.0f;
+	b3ConvexMergeResult* fewer = b3MergeConvexPieces( &def );
+	ENSURE( fewer != NULL );
+	ENSURE( fewer->stepCount == 3 );
+	ENSURE( fewer->steps[0].maxConcavity == 0.5f );
+	ENSURE_SMALL( fewer->steps[1].maxConcavity - sqrtf( 0.5f * 1.5f ), 1e-5f );
+	ENSURE( fewer->steps[2].maxConcavity == 1.5f );
+	ENSURE( fewer->steps[2].hullCount == 1 );
+	ENSURE( fewer->pieceCount == 1 );
+	ENSURE( IsCovered( fewer, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) );
+
+	// A closer fit at any cost: the first step, with the doorway open
+	def.hullWeight = 0.001f;
+	b3ConvexMergeResult* closer = b3MergeConvexPieces( &def );
+	ENSURE( closer != NULL );
+	ENSURE( closer->bestStep == 0 );
+	ENSURE( closer->pieceCount > 1 );
+	ENSURE( IsCovered( closer, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+
+	// The steps are the same whatever the weight
+	for ( int i = 0; i < 3; ++i )
 	{
-		b3DestroyConvexMergeResult( results[i] );
+		ENSURE( fewer->steps[i].hullCount == closer->steps[i].hullCount );
+		ENSURE( fewer->steps[i].sealedDepth == closer->steps[i].sealedDepth );
 	}
 
+	// A weight that is no weight counts as 1
+	def.hullWeight = 1.0f;
+	b3ConvexMergeResult* even = b3MergeConvexPieces( &def );
+	def.hullWeight = -2.0f;
+	b3ConvexMergeResult* negative = b3MergeConvexPieces( &def );
+	def.hullWeight = NAN;
+	b3ConvexMergeResult* notNumber = b3MergeConvexPieces( &def );
+	ENSURE( even != NULL && negative != NULL && notNumber != NULL );
+	ENSURE( negative->bestStep == even->bestStep );
+	ENSURE( notNumber->bestStep == even->bestStep );
+
+	b3DestroyConvexMergeResult( fewer );
+	b3DestroyConvexMergeResult( closer );
+	b3DestroyConvexMergeResult( even );
+	b3DestroyConvexMergeResult( negative );
+	b3DestroyConvexMergeResult( notNumber );
+	return 0;
+}
+
+// maxConcavity caps a sweep, and the step count is clamped.
+static int SweepStaysInBounds( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	// A cap under the tightest limit the sweep would pick itself (2.5 cm here) leaves one step
+	b3ConvexMergeDef def = MakeSweepDef( &wall, &pieces );
+	def.maxConcavity = 0.01f;
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 1 );
+	ENSURE( result->steps[0].maxConcavity == 0.01f );
+	b3DestroyConvexMergeResult( result );
+
+	// So does a range given upside down
+	def.minConcavity = 0.3f;
+	def.maxConcavity = 0.1f;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 1 );
+	ENSURE( result->steps[0].maxConcavity == 0.1f );
+	b3DestroyConvexMergeResult( result );
+
+	// A range that is not a number falls back to the size of the mesh
+	def.minConcavity = NAN;
+	def.maxConcavity = -1.0f;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 9 );
+	ENSURE( result->steps[0].maxConcavity > 0.02f && result->steps[8].maxConcavity < 0.41f );
+	b3DestroyConvexMergeResult( result );
+
+	def = MakeSweepDef( &wall, &pieces );
+	def.sweepSteps = 0;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 1 );
+	b3DestroyConvexMergeResult( result );
+
+	def.sweepSteps = -5;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 1 );
+	b3DestroyConvexMergeResult( result );
+
+	def.sweepSteps = 1000;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 64 );
+	for ( int i = 1; i < result->stepCount; ++i )
+	{
+		ENSURE( result->steps[i].maxConcavity > result->steps[i - 1].maxConcavity );
+		ENSURE( result->steps[i].hullCount <= result->steps[i - 1].hullCount );
+	}
+
+	b3DestroyConvexMergeResult( result );
 	return 0;
 }
 
@@ -524,50 +711,44 @@ static int SweepMeetsHullBudget( void )
 	MakeWall( &wall, false );
 	MakePieces( &pieces );
 
-	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
+	b3ConvexMergeDef def = MakeSweepDef( &wall, &pieces );
 	def.maxHullCount = 2;
-	const float limits[2] = { 0.01f, 0.05f };
-	b3ConvexMergeResult* results[2] = { NULL, NULL };
-	ENSURE( b3SweepConvexPieces( &def, limits, 2, results ) );
-	ENSURE( results[0]->pieceCount == 2 );
-	ENSURE( results[1]->pieceCount == 2 );
-	ENSURE( results[0]->maxConcavity > 0.25f );
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 9 );
+	for ( int i = 0; i < result->stepCount; ++i )
+	{
+		ENSURE( result->steps[i].hullCount <= 2 );
+	}
 
-	b3DestroyConvexMergeResult( results[0] );
-	b3DestroyConvexMergeResult( results[1] );
+	ENSURE( result->pieceCount <= 2 );
+	ENSURE( result->maxConcavity > 0.25f );
+	b3DestroyConvexMergeResult( result );
 	return 0;
 }
 
-static int SweepRejectsBadInput( void )
+// A sweep checks the definition as a single merge does, and gives the same hulls twice.
+static int SweepIsRepeatable( void )
 {
 	WallMesh wall;
 	WallPieces pieces;
 	MakeWall( &wall, false );
 	MakePieces( &pieces );
 
-	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
-	const float limits[2] = { 0.05f, 0.5f };
-	b3ConvexMergeResult* results[2] = { NULL, NULL };
-
-	ENSURE( b3SweepConvexPieces( NULL, limits, 2, results ) == false );
-	ENSURE( b3SweepConvexPieces( &def, NULL, 2, results ) == false );
-	ENSURE( b3SweepConvexPieces( &def, limits, 0, results ) == false );
-	ENSURE( b3SweepConvexPieces( &def, limits, 2, NULL ) == false );
-
-	// Limits that tighten, a negative one, and one that is not a number
-	const float tightening[2] = { 0.5f, 0.05f };
-	ENSURE( b3SweepConvexPieces( &def, tightening, 2, results ) == false );
-	const float negative[2] = { -0.1f, 0.05f };
-	ENSURE( b3SweepConvexPieces( &def, negative, 2, results ) == false );
-	const float notNumber[2] = { 0.05f, NAN };
-	ENSURE( b3SweepConvexPieces( &def, notNumber, 2, results ) == false );
+	b3ConvexMergeDef def = MakeSweepDef( &wall, &pieces );
+	def.maxConcavity = 1.5f;
+	b3ConvexMergeResult* first = b3MergeConvexPieces( &def );
+	b3ConvexMergeResult* second = b3MergeConvexPieces( &def );
+	ENSURE( first != NULL && second != NULL );
+	ENSURE( first->stepCount == second->stepCount );
+	ENSURE( first->bestStep == second->bestStep );
+	ENSURE( IsSameResult( first, second ) );
+	b3DestroyConvexMergeResult( first );
+	b3DestroyConvexMergeResult( second );
 
 	b3ConvexMergeDef bad = def;
 	bad.piecePoints = NULL;
-	ENSURE( b3SweepConvexPieces( &bad, limits, 2, results ) == false );
-
-	// Nothing was handed out
-	ENSURE( results[0] == NULL && results[1] == NULL );
+	ENSURE( b3MergeConvexPieces( &bad ) == NULL );
 	return 0;
 }
 
@@ -582,9 +763,12 @@ int ConvexMergeTest( void )
 	RUN_SUBTEST( MergeRespectsVertexLimit );
 	RUN_SUBTEST( MergeRejectsBadInput );
 	RUN_SUBTEST( MergeIsRepeatable );
-	RUN_SUBTEST( SweepLoosensStepByStep );
+	RUN_SUBTEST( SweepIsTheDefault );
+	RUN_SUBTEST( SweepStartsAsOneMerge );
+	RUN_SUBTEST( SweepFollowsRangeAndWeight );
+	RUN_SUBTEST( SweepStaysInBounds );
 	RUN_SUBTEST( SweepMeetsHullBudget );
-	RUN_SUBTEST( SweepRejectsBadInput );
+	RUN_SUBTEST( SweepIsRepeatable );
 
 	return 0;
 }

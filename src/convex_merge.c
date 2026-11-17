@@ -18,6 +18,11 @@
 // depth of a ray is therefore capped at twice its clearance, the farthest it gets from the
 // source surface while inside the hull. A doorway still reads as its full width, a sliver as
 // its thickness.
+//
+// How many hulls a mesh needs depends on the limit, and the right limit is rarely known up front.
+// By default the merge therefore sweeps it: the pieces are merged at a series of loosening
+// limits, each carrying on from the hulls the one before left, and the step with the best trade
+// between few hulls and little sealed is returned.
 
 #include "core.h"
 #include "math_internal.h"
@@ -34,6 +39,14 @@
 
 // Number of distances along a sample ray where the clearance is recorded
 #define B3_MERGE_LADDER_COUNT 24
+
+// The most limits a sweep tries
+#define B3_MERGE_MAX_SWEEP_STEPS 64
+
+// The range a sweep covers when the definition leaves it open, as fractions of the diagonal of
+// the mesh bounds
+#define B3_MERGE_SWEEP_MIN 0.005
+#define B3_MERGE_SWEEP_MAX 0.08
 
 // A point on the source surface with the outward direction of its triangle
 typedef struct b3MergeSample
@@ -142,10 +155,14 @@ typedef struct b3MergeContext
 b3ConvexMergeDef b3DefaultConvexMergeDef( void )
 {
 	b3ConvexMergeDef def = { 0 };
-	def.maxConcavity = 0.05f * b3GetLengthUnitsPerMeter();
+	def.maxConcavity = 0.0f;
+	def.minConcavity = 0.0f;
+	def.hullWeight = 1.0f;
 	def.maxHullCount = 0;
 	def.maxHullVertices = 32;
 	def.sampleCount = 8192;
+	def.sweepSteps = 9;
+	def.enableSweep = true;
 	return def;
 }
 
@@ -1001,8 +1018,8 @@ static void b3RunMerge( b3MergeContext* ctx, float maxConcavity, int maxHullCoun
 	}
 }
 
-// Pack the surviving hulls into one allocation
-static b3ConvexMergeResult* b3PackMergeResult( const b3MergeContext* ctx )
+// Pack the surviving hulls into one allocation, with room for the steps
+static b3ConvexMergeResult* b3PackMergeResult( const b3MergeContext* ctx, int stepCount )
 {
 	int pointCount = 0;
 	for ( int i = 0; i < ctx->nodeCount; ++i )
@@ -1016,14 +1033,19 @@ static b3ConvexMergeResult* b3PackMergeResult( const b3MergeContext* ctx )
 	size_t pointBytes = (size_t)pointCount * sizeof( b3Vec3 );
 	size_t offsetBytes = (size_t)( ctx->aliveCount + 1 ) * sizeof( int32_t );
 	size_t concavityBytes = (size_t)ctx->aliveCount * sizeof( float );
-	size_t byteCount = sizeof( b3ConvexMergeResult ) + pointBytes + offsetBytes + concavityBytes;
+	size_t stepBytes = (size_t)stepCount * sizeof( b3ConvexMergeStep );
+	size_t byteCount =
+		sizeof( b3ConvexMergeResult ) + pointBytes + offsetBytes + concavityBytes + stepBytes;
 
 	b3ConvexMergeResult* result = b3Alloc( byteCount );
 	result->points = (b3Vec3*)( result + 1 );
 	result->offsets = (int32_t*)( (char*)result->points + pointBytes );
 	result->concavities = (float*)( (char*)result->offsets + offsetBytes );
+	result->steps = (b3ConvexMergeStep*)( (char*)result->concavities + concavityBytes );
 	result->pieceCount = ctx->aliveCount;
 	result->maxConcavity = 0.0f;
+	result->stepCount = stepCount;
+	result->bestStep = 0;
 	result->byteCount = (int)byteCount;
 
 	int piece = 0;
@@ -1050,6 +1072,90 @@ static b3ConvexMergeResult* b3PackMergeResult( const b3MergeContext* ctx )
 	return result;
 }
 
+// The limits to merge at, tightest first. Without a sweep that is the limit of the definition.
+// A sweep spreads its limits geometrically over a range that follows the size of the mesh
+// unless the definition gives it.
+static int b3GetMergeLimits( const b3ConvexMergeDef* def, float* limits )
+{
+	if ( def->enableSweep == false )
+	{
+		limits[0] = b3MaxFloat( def->maxConcavity, 0.0f );
+		return 1;
+	}
+
+	b3Vec3 lower = def->meshVertices[0];
+	b3Vec3 upper = def->meshVertices[0];
+	for ( int i = 1; i < def->meshVertexCount; ++i )
+	{
+		lower = b3Min( lower, def->meshVertices[i] );
+		upper = b3Max( upper, def->meshVertices[i] );
+	}
+
+	double dx = (double)upper.x - (double)lower.x;
+	double dy = (double)upper.y - (double)lower.y;
+	double dz = (double)upper.z - (double)lower.z;
+	double diagonal = sqrt( dx * dx + dy * dy + dz * dz );
+
+	// The comparisons also turn away a NaN. maxConcavity caps the sweep, so a range given
+	// upside down collapses onto it.
+	double hi =
+		def->maxConcavity > 0.0f ? (double)def->maxConcavity : B3_MERGE_SWEEP_MAX * diagonal;
+	double lo =
+		def->minConcavity > 0.0f ? (double)def->minConcavity : B3_MERGE_SWEEP_MIN * diagonal;
+	lo = lo < hi ? lo : hi;
+
+	int count = b3ClampInt( def->sweepSteps, 1, B3_MERGE_MAX_SWEEP_STEPS );
+	if ( count == 1 || !( lo > 0.0 ) || lo == hi )
+	{
+		limits[0] = (float)hi;
+		return 1;
+	}
+
+	for ( int i = 0; i < count; ++i )
+	{
+		limits[i] = (float)( lo * pow( hi / lo, (double)i / (double)( count - 1 ) ) );
+	}
+
+	return count;
+}
+
+// The step of a sweep to return. Each step is a point: hull count against the depth its hulls
+// seal. Both are scaled by their largest value over the steps, and the step nearest to no hulls
+// and nothing sealed wins. Among steps with the same hull count only the first, the tightest, is
+// a candidate.
+static int b3ChooseMergeStep( const b3ConvexMergeStep* steps, int count, float hullWeight )
+{
+	double weight = b3IsValidFloat( hullWeight ) && hullWeight > 0.0f ? (double)hullWeight : 1.0;
+	int maxHulls = 0;
+	float maxSealed = 0.0f;
+	for ( int i = 0; i < count; ++i )
+	{
+		maxHulls = b3MaxInt( maxHulls, steps[i].hullCount );
+		maxSealed = b3MaxFloat( maxSealed, steps[i].sealedDepth );
+	}
+
+	int best = 0;
+	double bestScore = DBL_MAX;
+	for ( int i = 0; i < count; ++i )
+	{
+		if ( i > 0 && steps[i].hullCount == steps[i - 1].hullCount )
+		{
+			continue;
+		}
+
+		double hulls = maxHulls > 0 ? weight * (double)steps[i].hullCount / (double)maxHulls : 0.0;
+		double sealed = maxSealed > 0.0f ? (double)steps[i].sealedDepth / (double)maxSealed : 0.0;
+		double score = hulls * hulls + sealed * sealed;
+		if ( score < bestScore )
+		{
+			bestScore = score;
+			best = i;
+		}
+	}
+
+	return best;
+}
+
 b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 {
 	b3MergeContext ctx;
@@ -1058,45 +1164,49 @@ b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 		return NULL;
 	}
 
-	b3RunMerge( &ctx, def->maxConcavity, def->maxHullCount );
-	b3ConvexMergeResult* result = b3PackMergeResult( &ctx );
-	b3DestroyMergeContext( &ctx );
-	return result;
-}
+	float limits[B3_MERGE_MAX_SWEEP_STEPS];
+	int stepCount = b3GetMergeLimits( def, limits );
 
-bool b3SweepConvexPieces( const b3ConvexMergeDef* def, const float* maxConcavities, int count,
-						  b3ConvexMergeResult** results )
-{
-	if ( maxConcavities == NULL || results == NULL || count < 1 )
+	// Each limit carries on from the hulls the one before left. The step to return is only known
+	// once all of them are in, so the hulls of every step that could be chosen are kept: the
+	// first step at each hull count.
+	b3ConvexMergeStep steps[B3_MERGE_MAX_SWEEP_STEPS];
+	b3ConvexMergeResult* packed[B3_MERGE_MAX_SWEEP_STEPS] = { 0 };
+	for ( int i = 0; i < stepCount; ++i )
 	{
-		return false;
-	}
+		b3RunMerge( &ctx, limits[i], def->maxHullCount );
 
-	// Each limit carries on from the one before, so they have to loosen as they go. The
-	// negated test also turns away a NaN.
-	for ( int i = 0; i < count; ++i )
-	{
-		float previous = i > 0 ? maxConcavities[i - 1] : 0.0f;
-		if ( !( maxConcavities[i] >= previous ) )
+		float sealedDepth = 0.0f;
+		for ( int j = 0; j < ctx.nodeCount; ++j )
 		{
-			return false;
+			if ( ctx.nodes[j].alive )
+			{
+				sealedDepth = b3MaxFloat( sealedDepth, ctx.nodes[j].concavity );
+			}
+		}
+
+		steps[i] = ( b3ConvexMergeStep ){ limits[i], sealedDepth, ctx.aliveCount };
+		if ( i == 0 || steps[i].hullCount != steps[i - 1].hullCount )
+		{
+			packed[i] = b3PackMergeResult( &ctx, stepCount );
 		}
 	}
 
-	b3MergeContext ctx;
-	if ( b3CreateMergeContext( &ctx, def ) == false )
-	{
-		return false;
-	}
-
-	for ( int i = 0; i < count; ++i )
-	{
-		b3RunMerge( &ctx, maxConcavities[i], def->maxHullCount );
-		results[i] = b3PackMergeResult( &ctx );
-	}
-
 	b3DestroyMergeContext( &ctx );
-	return true;
+
+	int best = b3ChooseMergeStep( steps, stepCount, def->hullWeight );
+	b3ConvexMergeResult* result = packed[best];
+	for ( int i = 0; i < stepCount; ++i )
+	{
+		if ( i != best )
+		{
+			b3DestroyConvexMergeResult( packed[i] );
+		}
+	}
+
+	memcpy( result->steps, steps, (size_t)stepCount * sizeof( b3ConvexMergeStep ) );
+	result->bestStep = best;
+	return result;
 }
 
 void b3DestroyConvexMergeResult( b3ConvexMergeResult* result )
