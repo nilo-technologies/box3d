@@ -123,6 +123,7 @@ typedef struct b3MergeContext
 
 	b3MergeNode* nodes;
 	int nodeCount;
+	int nodeCapacity;
 	int aliveCount;
 
 	b3MergeCandidate* heap;
@@ -797,7 +798,7 @@ static void b3MergeNodes( b3MergeContext* ctx, const b3MergeCandidate* candidate
 	}
 }
 
-static void b3DestroyMergeContext( b3MergeContext* ctx, int pieceCount )
+static void b3DestroyMergeContext( b3MergeContext* ctx )
 {
 	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{
@@ -811,7 +812,7 @@ static void b3DestroyMergeContext( b3MergeContext* ctx, int pieceCount )
 	}
 
 	int cellCount = ctx->gridCounts[0] * ctx->gridCounts[1] * ctx->gridCounts[2];
-	b3Free( ctx->nodes, (size_t)pieceCount * sizeof( b3MergeNode ) );
+	b3Free( ctx->nodes, (size_t)ctx->nodeCapacity * sizeof( b3MergeNode ) );
 	b3Free( ctx->heap, (size_t)ctx->heapCapacity * sizeof( b3MergeCandidate ) );
 	b3Free( ctx->scratch, (size_t)( 2 * B3_MAX_HULL_VERTICES ) * sizeof( b3Vec3 ) );
 	b3Free( ctx->cellStarts, (size_t)( cellCount + 1 ) * sizeof( int ) );
@@ -819,37 +820,39 @@ static void b3DestroyMergeContext( b3MergeContext* ctx, int pieceCount )
 	b3Free( ctx->samples, (size_t)ctx->sampleCapacity * sizeof( b3MergeSample ) );
 }
 
-b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
+// Check the definition and build what every merge of it shares: the samples, their grid, one node
+// per piece and the links between neighbors.
+static bool b3CreateMergeContext( b3MergeContext* ctx, const b3ConvexMergeDef* def )
 {
 	if ( def == NULL || def->meshVertices == NULL || def->meshIndices == NULL ||
 		 def->meshVertexCount < 3 || def->meshTriangleCount < 1 )
 	{
-		return NULL;
+		return false;
 	}
 
 	if ( def->piecePoints == NULL || def->pieceOffsets == NULL || def->pieceCount < 1 )
 	{
-		return NULL;
+		return false;
 	}
 
 	for ( int i = 0; i < 3 * def->meshTriangleCount; ++i )
 	{
 		if ( def->meshIndices[i] < 0 || def->meshIndices[i] >= def->meshVertexCount )
 		{
-			return NULL;
+			return false;
 		}
 	}
 
 	if ( def->pieceOffsets[0] != 0 )
 	{
-		return NULL;
+		return false;
 	}
 
 	for ( int i = 0; i < def->pieceCount; ++i )
 	{
 		if ( def->pieceOffsets[i + 1] < def->pieceOffsets[i] )
 		{
-			return NULL;
+			return false;
 		}
 	}
 
@@ -869,79 +872,109 @@ b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 	float diagonal = b3Length( b3Sub( bounds.upperBound, bounds.lowerBound ) );
 	if ( diagonal <= 0.0f || b3IsValidAABB( bounds ) == false )
 	{
-		return NULL;
+		return false;
 	}
 
-	b3MergeContext ctx = { 0 };
-	ctx.maxConcavity = b3MaxFloat( def->maxConcavity, 0.0f );
-	ctx.maxHullVertices = b3ClampInt( def->maxHullVertices, 4, B3_MAX_HULL_VERTICES );
-	ctx.tolerance = 1.0e-4f * diagonal;
-	ctx.hasBudget = def->maxHullCount > 0;
+	*ctx = ( b3MergeContext ){ 0 };
+	ctx->maxHullVertices = b3ClampInt( def->maxHullVertices, 4, B3_MAX_HULL_VERTICES );
+	ctx->tolerance = 1.0e-4f * diagonal;
 
 	// The ladder spans three decades up to the size of the mesh
 	float ladderRatio = powf( 1024.0f, 1.0f / (float)( B3_MERGE_LADDER_COUNT - 1 ) );
-	ctx.ladder[0] = b3MaxFloat( diagonal / 1024.0f, FLT_MIN );
+	ctx->ladder[0] = b3MaxFloat( diagonal / 1024.0f, FLT_MIN );
 	for ( int i = 1; i < B3_MERGE_LADDER_COUNT; ++i )
 	{
-		ctx.ladder[i] = ladderRatio * ctx.ladder[i - 1];
+		ctx->ladder[i] = ladderRatio * ctx->ladder[i - 1];
 	}
-	ctx.scratch = b3Alloc( (size_t)( 2 * B3_MAX_HULL_VERTICES ) * sizeof( b3Vec3 ) );
 
-	b3CreateMergeSamples( &ctx, def, bounds );
-	b3CreateMergeGrid( &ctx, bounds );
+	ctx->scratch = b3Alloc( (size_t)( 2 * B3_MAX_HULL_VERTICES ) * sizeof( b3Vec3 ) );
+
+	b3CreateMergeSamples( ctx, def, bounds );
+	b3CreateMergeGrid( ctx, bounds );
 
 	// One node per piece that makes a hull. A piece too flat or too small to be a hull is dropped,
 	// it could not become a shape either.
-	ctx.nodes = b3AllocZero( (size_t)def->pieceCount * sizeof( b3MergeNode ) );
+	ctx->nodeCapacity = def->pieceCount;
+	ctx->nodes = b3AllocZero( (size_t)def->pieceCount * sizeof( b3MergeNode ) );
 	for ( int i = 0; i < def->pieceCount; ++i )
 	{
 		int begin = def->pieceOffsets[i];
 		int count = def->pieceOffsets[i + 1] - begin;
 		b3HullData* hull =
-			count >= 4 ? b3CreateHull( def->piecePoints + begin, count, ctx.maxHullVertices )
+			count >= 4 ? b3CreateHull( def->piecePoints + begin, count, ctx->maxHullVertices )
 					   : NULL;
 		if ( hull == NULL )
 		{
 			continue;
 		}
 
-		b3MergeNode* node = ctx.nodes + ctx.nodeCount++;
+		b3MergeNode* node = ctx->nodes + ctx->nodeCount++;
 		node->hull = hull;
-		node->concavity = b3ComputeHullConcavity( &ctx, hull, FLT_MAX );
+		node->concavity = b3ComputeHullConcavity( ctx, hull, FLT_MAX );
 		node->floor = node->concavity;
 		node->alive = true;
 	}
 
-	ctx.aliveCount = ctx.nodeCount;
+	ctx->aliveCount = ctx->nodeCount;
 
 	// Pieces are neighbors when their boxes come within a margin of each other. A pair that only
 	// looks close costs one hull build and is then judged like any other.
 	float margin = 0.01f * diagonal;
-	for ( int i = 0; i < ctx.nodeCount; ++i )
+	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{
-		b3AABB box = ctx.nodes[i].hull->aabb;
+		b3AABB box = ctx->nodes[i].hull->aabb;
 		box.lowerBound = b3Sub( box.lowerBound, ( b3Vec3 ){ margin, margin, margin } );
 		box.upperBound = b3Add( box.upperBound, ( b3Vec3 ){ margin, margin, margin } );
-		for ( int j = i + 1; j < ctx.nodeCount; ++j )
+		for ( int j = i + 1; j < ctx->nodeCount; ++j )
 		{
-			if ( b3AABB_Overlaps( box, ctx.nodes[j].hull->aabb ) )
+			if ( b3AABB_Overlaps( box, ctx->nodes[j].hull->aabb ) )
 			{
 				// The merged hull seals at least what its worse part seals
-				float concavity = b3MaxFloat( ctx.nodes[i].concavity, ctx.nodes[j].concavity );
-				b3SetLink( ctx.nodes + i, j, concavity, 0.0f );
-				b3SetLink( ctx.nodes + j, i, concavity, 0.0f );
-				b3QueueEstimate( &ctx, i, j, concavity, 0.0f );
+				float concavity = b3MaxFloat( ctx->nodes[i].concavity, ctx->nodes[j].concavity );
+				b3SetLink( ctx->nodes + i, j, concavity, 0.0f );
+				b3SetLink( ctx->nodes + j, i, concavity, 0.0f );
+			}
+		}
+	}
+
+	return true;
+}
+
+// Merge under a limit, starting from wherever the context stands. Run again with a looser limit
+// and the merge carries on from the hulls the tighter one left.
+static void b3RunMerge( b3MergeContext* ctx, float maxConcavity, int maxHullCount )
+{
+	ctx->maxConcavity = b3MaxFloat( maxConcavity, 0.0f );
+	ctx->hasBudget = maxHullCount > 0;
+
+	// Queue every link afresh: what a merge may cost depends on the limit. The links keep what
+	// earlier pricing found, so nothing is measured twice.
+	ctx->heapCount = 0;
+	for ( int i = 0; i < ctx->nodeCount; ++i )
+	{
+		const b3MergeNode* node = ctx->nodes + i;
+		if ( node->alive == false )
+		{
+			continue;
+		}
+
+		for ( int j = 0; j < node->linkCount; ++j )
+		{
+			b3MergeLink link = node->links[j];
+			if ( link.node > i )
+			{
+				b3QueueEstimate( ctx, i, link.node, link.concavity, link.growth );
 			}
 		}
 	}
 
 	// Collapse the cheapest edge until the next one would seal too much, or, with a hull budget,
 	// until the budget is met.
-	while ( ctx.heapCount > 0 )
+	while ( ctx->heapCount > 0 )
 	{
-		b3MergeCandidate candidate = b3PopCandidate( &ctx );
-		const b3MergeNode* nodeA = ctx.nodes + candidate.nodeA;
-		const b3MergeNode* nodeB = ctx.nodes + candidate.nodeB;
+		b3MergeCandidate candidate = b3PopCandidate( ctx );
+		const b3MergeNode* nodeA = ctx->nodes + candidate.nodeA;
+		const b3MergeNode* nodeB = ctx->nodes + candidate.nodeB;
 		if ( nodeA->alive == false || nodeB->alive == false ||
 			 nodeA->version != candidate.versionA || nodeB->version != candidate.versionB )
 		{
@@ -950,49 +983,52 @@ b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 
 		// Over the limit everything left in the queue is over the limit too, estimates included,
 		// and only a hull budget still to be met keeps the merging going.
-		bool overBudget = ctx.hasBudget && ctx.aliveCount > def->maxHullCount;
-		if ( candidate.cost > ctx.maxConcavity && overBudget == false )
+		bool overBudget = ctx->hasBudget && ctx->aliveCount > maxHullCount;
+		if ( candidate.cost > ctx->maxConcavity && overBudget == false )
 		{
 			break;
 		}
 
 		if ( candidate.exact == false )
 		{
-			b3PriceCandidate( &ctx, candidate );
+			b3PriceCandidate( ctx, candidate );
 			continue;
 		}
 
-		b3MergeNodes( &ctx, &candidate );
+		b3MergeNodes( ctx, &candidate );
 	}
+}
 
-	// Pack the surviving hulls into one allocation
+// Pack the surviving hulls into one allocation
+static b3ConvexMergeResult* b3PackMergeResult( const b3MergeContext* ctx )
+{
 	int pointCount = 0;
-	for ( int i = 0; i < ctx.nodeCount; ++i )
+	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{
-		if ( ctx.nodes[i].alive )
+		if ( ctx->nodes[i].alive )
 		{
-			pointCount += ctx.nodes[i].hull->vertexCount;
+			pointCount += ctx->nodes[i].hull->vertexCount;
 		}
 	}
 
 	size_t pointBytes = (size_t)pointCount * sizeof( b3Vec3 );
-	size_t offsetBytes = (size_t)( ctx.aliveCount + 1 ) * sizeof( int32_t );
-	size_t concavityBytes = (size_t)ctx.aliveCount * sizeof( float );
+	size_t offsetBytes = (size_t)( ctx->aliveCount + 1 ) * sizeof( int32_t );
+	size_t concavityBytes = (size_t)ctx->aliveCount * sizeof( float );
 	size_t byteCount = sizeof( b3ConvexMergeResult ) + pointBytes + offsetBytes + concavityBytes;
 
 	b3ConvexMergeResult* result = b3Alloc( byteCount );
 	result->points = (b3Vec3*)( result + 1 );
 	result->offsets = (int32_t*)( (char*)result->points + pointBytes );
 	result->concavities = (float*)( (char*)result->offsets + offsetBytes );
-	result->pieceCount = ctx.aliveCount;
+	result->pieceCount = ctx->aliveCount;
 	result->maxConcavity = 0.0f;
 	result->byteCount = (int)byteCount;
 
 	int piece = 0;
 	int offset = 0;
-	for ( int i = 0; i < ctx.nodeCount; ++i )
+	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{
-		const b3MergeNode* node = ctx.nodes + i;
+		const b3MergeNode* node = ctx->nodes + i;
 		if ( node->alive == false )
 		{
 			continue;
@@ -1009,9 +1045,56 @@ b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 	}
 
 	result->offsets[piece] = offset;
-
-	b3DestroyMergeContext( &ctx, def->pieceCount );
 	return result;
+}
+
+b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
+{
+	b3MergeContext ctx;
+	if ( b3CreateMergeContext( &ctx, def ) == false )
+	{
+		return NULL;
+	}
+
+	b3RunMerge( &ctx, def->maxConcavity, def->maxHullCount );
+	b3ConvexMergeResult* result = b3PackMergeResult( &ctx );
+	b3DestroyMergeContext( &ctx );
+	return result;
+}
+
+bool b3SweepConvexPieces( const b3ConvexMergeDef* def, const float* maxConcavities, int count,
+						  b3ConvexMergeResult** results )
+{
+	if ( maxConcavities == NULL || results == NULL || count < 1 )
+	{
+		return false;
+	}
+
+	// Each limit carries on from the one before, so they have to loosen as they go. The
+	// negated test also turns away a NaN.
+	for ( int i = 0; i < count; ++i )
+	{
+		float previous = i > 0 ? maxConcavities[i - 1] : 0.0f;
+		if ( !( maxConcavities[i] >= previous ) )
+		{
+			return false;
+		}
+	}
+
+	b3MergeContext ctx;
+	if ( b3CreateMergeContext( &ctx, def ) == false )
+	{
+		return false;
+	}
+
+	for ( int i = 0; i < count; ++i )
+	{
+		b3RunMerge( &ctx, maxConcavities[i], def->maxHullCount );
+		results[i] = b3PackMergeResult( &ctx );
+	}
+
+	b3DestroyMergeContext( &ctx );
+	return true;
 }
 
 void b3DestroyConvexMergeResult( b3ConvexMergeResult* result )

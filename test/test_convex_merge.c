@@ -6,6 +6,7 @@
 #include "box3d/collision.h"
 #include "box3d/math_functions.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -457,6 +458,114 @@ static int MergeIsRepeatable( void )
 	return 0;
 }
 
+// A sweep merges at a series of loosening limits in one pass. Each step matches or undercuts the
+// hull count of the one before, and stays within its own limit.
+static int SweepLoosensStepByStep( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
+	const float limits[4] = { 0.0f, 0.05f, 0.5f, 1.5f };
+	b3ConvexMergeResult* results[4] = { NULL, NULL, NULL, NULL };
+	ENSURE( b3SweepConvexPieces( &def, limits, 4, results ) );
+
+	for ( int i = 0; i < 4; ++i )
+	{
+		ENSURE( results[i] != NULL );
+		ENSURE( results[i]->pieceCount >= 1 );
+		ENSURE( results[i]->maxConcavity <= limits[i] + 1e-3f );
+		if ( i > 0 )
+		{
+			ENSURE( results[i]->pieceCount <= results[i - 1]->pieceCount );
+		}
+	}
+
+	// The doorway is 1 wide: it stays open up to half a meter and closes at 1.5
+	ENSURE( results[0]->pieceCount == 3 );
+	ENSURE( results[1]->pieceCount == 3 );
+	ENSURE( IsCovered( results[2], ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+	ENSURE( results[3]->pieceCount == 1 );
+	ENSURE( IsCovered( results[3], ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) );
+
+	// The first step is the merge at that limit alone, hull for hull
+	def.maxConcavity = limits[0];
+	b3ConvexMergeResult* single = b3MergeConvexPieces( &def );
+	ENSURE( single != NULL );
+	ENSURE( single->pieceCount == results[0]->pieceCount );
+	for ( int i = 0; i < single->offsets[single->pieceCount]; ++i )
+	{
+		ENSURE( single->points[i].x == results[0]->points[i].x );
+		ENSURE( single->points[i].y == results[0]->points[i].y );
+		ENSURE( single->points[i].z == results[0]->points[i].z );
+	}
+
+	b3DestroyConvexMergeResult( single );
+	for ( int i = 0; i < 4; ++i )
+	{
+		b3DestroyConvexMergeResult( results[i] );
+	}
+
+	return 0;
+}
+
+// A hull budget holds at every step of a sweep.
+static int SweepMeetsHullBudget( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
+	def.maxHullCount = 2;
+	const float limits[2] = { 0.01f, 0.05f };
+	b3ConvexMergeResult* results[2] = { NULL, NULL };
+	ENSURE( b3SweepConvexPieces( &def, limits, 2, results ) );
+	ENSURE( results[0]->pieceCount == 2 );
+	ENSURE( results[1]->pieceCount == 2 );
+	ENSURE( results[0]->maxConcavity > 0.25f );
+
+	b3DestroyConvexMergeResult( results[0] );
+	b3DestroyConvexMergeResult( results[1] );
+	return 0;
+}
+
+static int SweepRejectsBadInput( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
+	const float limits[2] = { 0.05f, 0.5f };
+	b3ConvexMergeResult* results[2] = { NULL, NULL };
+
+	ENSURE( b3SweepConvexPieces( NULL, limits, 2, results ) == false );
+	ENSURE( b3SweepConvexPieces( &def, NULL, 2, results ) == false );
+	ENSURE( b3SweepConvexPieces( &def, limits, 0, results ) == false );
+	ENSURE( b3SweepConvexPieces( &def, limits, 2, NULL ) == false );
+
+	// Limits that tighten, a negative one, and one that is not a number
+	const float tightening[2] = { 0.5f, 0.05f };
+	ENSURE( b3SweepConvexPieces( &def, tightening, 2, results ) == false );
+	const float negative[2] = { -0.1f, 0.05f };
+	ENSURE( b3SweepConvexPieces( &def, negative, 2, results ) == false );
+	const float notNumber[2] = { 0.05f, NAN };
+	ENSURE( b3SweepConvexPieces( &def, notNumber, 2, results ) == false );
+
+	b3ConvexMergeDef bad = def;
+	bad.piecePoints = NULL;
+	ENSURE( b3SweepConvexPieces( &bad, limits, 2, results ) == false );
+
+	// Nothing was handed out
+	ENSURE( results[0] == NULL && results[1] == NULL );
+	return 0;
+}
+
 int ConvexMergeTest( void )
 {
 	RUN_SUBTEST( MergeKeepsDoorwayOpen );
@@ -468,6 +577,9 @@ int ConvexMergeTest( void )
 	RUN_SUBTEST( MergeRespectsVertexLimit );
 	RUN_SUBTEST( MergeRejectsBadInput );
 	RUN_SUBTEST( MergeIsRepeatable );
+	RUN_SUBTEST( SweepLoosensStepByStep );
+	RUN_SUBTEST( SweepMeetsHullBudget );
+	RUN_SUBTEST( SweepRejectsBadInput );
 
 	return 0;
 }

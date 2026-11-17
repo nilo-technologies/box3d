@@ -259,6 +259,16 @@ B3_API b3ConvexMergeDef b3DefaultConvexMergeDef( void );
 /// Returns NULL if the definition is invalid.
 B3_API b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def );
 
+/// Merge the same pieces at a series of limits in one pass, to see how the hull count falls as
+/// the limit loosens. The limits must not decrease. Each one carries on from the hulls the one
+/// before left, so the whole series costs little more than a single merge at the loosest limit,
+/// and the hull counts never rise along it. results receives one result per limit, each destroyed
+/// with b3DestroyConvexMergeResult. def->maxConcavity is not used. A hull budget in
+/// def->maxHullCount applies at every limit.
+/// Returns false, with results untouched, if the definition or the limits are invalid.
+B3_API bool b3SweepConvexPieces( const b3ConvexMergeDef* def, const float* maxConcavities, int count,
+								 b3ConvexMergeResult** results );
+
 /// Destroy a convex merge result.
 B3_API void b3DestroyConvexMergeResult( b3ConvexMergeResult* result );
 

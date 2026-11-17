@@ -174,6 +174,27 @@ let `maxConcavity` decide how many hulls remain. With `maxHullCount` set, mergin
 continues past the limit until the budget is met, and `result->maxConcavity` reports what
 that cost. The source mesh should be closed. Either winding works.
 
+How many hulls a mesh needs depends on the limit, and the right limit is rarely known up
+front. `b3SweepConvexPieces` merges the same pieces at a series of loosening limits in one
+pass and returns a result for each, so the hull count can be read against the limit:
+
+```c
+float limits[] = { 0.02f, 0.05f, 0.1f, 0.2f };   // must not decrease
+b3ConvexMergeResult* results[4];
+if (b3SweepConvexPieces(&def, limits, 4, results))
+{
+    for (int i = 0; i < 4; ++i)
+    {
+        // results[i]->pieceCount hulls seal at most results[i]->maxConcavity
+        b3DestroyConvexMergeResult(results[i]);
+    }
+}
+```
+
+Each limit carries on from the hulls the one before left. The samples and the neighbor
+graph are built once, so the whole series costs little more than a single merge at the
+loosest limit, and the hull count never rises along it.
+
 ### Triangle Meshes
 
 Triangle meshes let you describe concave or open surfaces using a triangle soup.
