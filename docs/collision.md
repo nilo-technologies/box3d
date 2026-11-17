@@ -212,6 +212,27 @@ past the limit until the budget is met, at every step of a sweep, and
 `result->maxConcavity` reports what that cost. The source mesh should be closed. Either
 winding works.
 
+Three options are experimental. They are off by default, and are being measured against
+each other before any of them stays:
+
+```c
+def.enableSplit = true;    // fit the pieces to the mesh, and cut the ones that seal too much
+def.sampleSpacing = 1.0f;  // space the samples by the tightest limit instead of counting them
+def.seedTriangles = true;  // no pieces: start from the triangles of the mesh
+```
+
+- A voxel piece reaches past the surface by about a voxel, and a merge can only be as tight
+  as its pieces. `enableSplit` makes each piece the hull of the solid inside it, then cuts
+  any piece that still seals more than the tightest limit, through the sample with the
+  deepest run.
+- `sampleSpacing` sets the distance between sample points as a multiple of the tightest
+  limit, so the sample count follows from the area of the mesh.
+- `seedTriangles` is HACD as the Roblox article describes it: every triangle starts as a
+  flat piece, triangles that touch are neighbors, and pieces in one plane merge as polygons
+  until they leave it. No voxels are involved, so nothing reaches past the surface. The
+  hulls follow the surface, though, and the inside of a thick solid can stay uncovered. A
+  piece still flat at the end is pushed into the solid to make it a hull.
+
 ### Triangle Meshes
 
 Triangle meshes let you describe concave or open surfaces using a triangle soup.

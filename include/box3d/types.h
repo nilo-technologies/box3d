@@ -2331,7 +2331,7 @@ typedef struct b3ConvexMergeDef
 	/// The source mesh triangle count. Must be 1 or more.
 	int meshTriangleCount;
 
-	/// The piece count. Must be 1 or more.
+	/// The piece count. Must be 1 or more, unless seedTriangles is set.
 	int pieceCount;
 
 	/// The deepest open space a merged hull may seal, in length units. This is how far a hull may
@@ -2365,6 +2365,24 @@ typedef struct b3ConvexMergeDef
 	/// The number of limits the sweep tries, spread geometrically from minConcavity to
 	/// maxConcavity. Clamped to [1, 64]. Not used without enableSweep.
 	int sweepSteps;
+
+	/// Experimental. Distance between the sample points on the source surface, as a multiple of the
+	/// tightest limit merged to. The sample count then follows from the surface area instead of
+	/// sampleCount, so the sampling keeps up with the size of what the limit is meant to catch.
+	/// Use 0 to sample by sampleCount.
+	float sampleSpacing;
+
+	/// Experimental. Fit each piece to the mesh before merging, and cut the pieces that seal more
+	/// than the tightest limit until they no longer do. A piece becomes the hull of the solid
+	/// inside it, so it stops reaching past the surface, and a merge is no longer held to what
+	/// the pieces sealed as they came.
+	bool enableSplit;
+
+	/// Experimental. Start from the triangles of the mesh instead of from pieces, as HACD does:
+	/// every triangle is a flat piece, and pieces that share an edge are neighbors. The pieces
+	/// of the definition are not used and may be left out. The hulls follow the surface, so the
+	/// inside of a thick solid can stay uncovered.
+	bool seedTriangles;
 
 	/// Find the limit instead of taking it. How many hulls a mesh needs depends on the limit, and
 	/// the right limit is rarely known up front. With this on the pieces are merged at a series

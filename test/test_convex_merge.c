@@ -752,6 +752,157 @@ static int SweepIsRepeatable( void )
 	return 0;
 }
 
+// One piece over the whole wall seals the doorway. Fitted to the mesh and cut where it seals,
+// it comes apart into pieces that leave the doorway open.
+static int SplitOpensDoorway( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	// A box a little larger than the wall, as a voxel piece would be
+	b3Vec3 box[8];
+	for ( int j = 0; j < 8; ++j )
+	{
+		box[j] = ( b3Vec3 ){ ( j & 1 ) ? 2.05f : -2.05f, ( j & 2 ) ? 3.05f : -0.05f,
+							 ( j & 4 ) ? 0.2f : -0.2f };
+	}
+
+	int32_t offsets[2] = { 0, 8 };
+	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
+	def.piecePoints = box;
+	def.pieceOffsets = offsets;
+	def.pieceCount = 1;
+
+	// As it comes, the piece is the result
+	b3ConvexMergeResult* sealed = b3MergeConvexPieces( &def );
+	ENSURE( sealed != NULL );
+	ENSURE( sealed->pieceCount == 1 );
+	ENSURE( sealed->maxConcavity > 0.9f );
+	ENSURE( IsCovered( sealed, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) );
+	b3DestroyConvexMergeResult( sealed );
+
+	def.enableSplit = true;
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	ENSURE_SMALL( result->maxConcavity, 1e-3f );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ -1.2f, 1.0f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 1.2f, 2.5f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 2.6f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+
+	// The pieces were fitted to the wall: nothing is left of the margin of the box. Where two
+	// pieces meet they stop a hair short of each other.
+	ENSURE_SMALL( GetVolume( result ) - 2.97f, 5e-3f );
+	b3DestroyConvexMergeResult( result );
+
+	// Pieces that seal nothing are fitted and left whole. Either winding works.
+	MakeWall( &wall, true );
+	def = MakeWallDef( &wall, &pieces );
+	def.enableSplit = true;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	ENSURE_SMALL( GetVolume( result ) - 2.97f, 5e-3f );
+	b3DestroyConvexMergeResult( result );
+	return 0;
+}
+
+// Seeded with the triangles of the mesh the merge needs no pieces: the faces of the wall grow
+// into the hulls around the doorway.
+static int SeedTrianglesKeepsDoorwayOpen( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	b3ConvexMergeDef def = MakeWallDef( &wall, &pieces );
+	def.piecePoints = NULL;
+	def.pieceOffsets = NULL;
+	def.pieceCount = 0;
+	ENSURE( b3MergeConvexPieces( &def ) == NULL );
+
+	def.seedTriangles = true;
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	ENSURE_SMALL( result->maxConcavity, 1e-3f );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ -1.2f, 1.0f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 1.2f, 2.5f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 2.6f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+	ENSURE_SMALL( GetVolume( result ) - 2.97f, 1e-3f );
+	b3DestroyConvexMergeResult( result );
+
+	// The same with the mesh wound the other way, and with a limit as wide as the doorway
+	MakeWall( &wall, true );
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	b3DestroyConvexMergeResult( result );
+
+	def.maxConcavity = 1.5f;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 1 );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) );
+	b3DestroyConvexMergeResult( result );
+
+	// A hull budget and the sweep work as they do on pieces
+	def.maxConcavity = 0.05f;
+	def.maxHullCount = 2;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 2 );
+	b3DestroyConvexMergeResult( result );
+
+	def = MakeSweepDef( &wall, &pieces );
+	def.seedTriangles = true;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 9 );
+	ENSURE( result->pieceCount == 3 );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+	b3DestroyConvexMergeResult( result );
+	return 0;
+}
+
+// Sampling by spacing: the sample count follows from the area of the mesh and the limit.
+static int SampleSpacingFollowsLimit( void )
+{
+	WallMesh wall;
+	WallPieces pieces;
+	MakeWall( &wall, false );
+	MakePieces( &pieces );
+
+	b3ConvexMergeDef def = MakeSweepDef( &wall, &pieces );
+	def.sampleSpacing = 1.0f;
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+	b3DestroyConvexMergeResult( result );
+
+	// A spacing that is not a number, or a limit of zero to space by, falls back to the count
+	def.sampleSpacing = NAN;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	b3DestroyConvexMergeResult( result );
+
+	def = MakeWallDef( &wall, &pieces );
+	def.maxConcavity = 0.0f;
+	def.sampleSpacing = 1.0f;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	b3DestroyConvexMergeResult( result );
+	return 0;
+}
+
 int ConvexMergeTest( void )
 {
 	RUN_SUBTEST( MergeKeepsDoorwayOpen );
@@ -769,6 +920,9 @@ int ConvexMergeTest( void )
 	RUN_SUBTEST( SweepStaysInBounds );
 	RUN_SUBTEST( SweepMeetsHullBudget );
 	RUN_SUBTEST( SweepIsRepeatable );
+	RUN_SUBTEST( SplitOpensDoorway );
+	RUN_SUBTEST( SeedTrianglesKeepsDoorwayOpen );
+	RUN_SUBTEST( SampleSpacingFollowsLimit );
 
 	return 0;
 }
