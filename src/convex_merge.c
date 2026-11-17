@@ -52,11 +52,6 @@
 // The most limits a sweep tries
 #define B3_MERGE_MAX_SWEEP_STEPS 64
 
-// How often a piece may be cut in two on its way into the merge, and how many pieces all the
-// cutting may add
-#define B3_MERGE_MAX_SPLIT_DEPTH 6
-#define B3_MERGE_MAX_SPLIT_NODES 4096
-
 // The range a sweep covers when the definition leaves it open, as fractions of the diagonal of
 // the mesh bounds
 #define B3_MERGE_SWEEP_MIN 0.005
@@ -117,8 +112,6 @@ typedef struct b3MergeNode
 	// Bumped on every merge so stale queue entries can be recognized
 	int version;
 
-	// How many cuts made this piece out of the one that came in
-	int splitDepth;
 	bool alive;
 } b3MergeNode;
 
@@ -211,7 +204,6 @@ b3ConvexMergeDef b3DefaultConvexMergeDef( void )
 	def.maxHullVertices = 32;
 	def.sampleCount = 8192;
 	def.sweepSteps = 9;
-	def.enableSplit = false;
 	def.seedTriangles = true;
 	def.enableSweep = true;
 	return def;
@@ -338,8 +330,9 @@ static void b3CreateMergeSamples( b3MergeContext* ctx, const b3ConvexMergeDef* d
 	ctx->mesh = meshData;
 	ctx->reach = reach;
 
-	// The same mesh seen from inside the solid, for telling whether a point is in it
-	if ( meshData != NULL && ( def->enableSplit || def->seedTriangles ) )
+	// The same mesh seen from inside the solid, for finding how much solid lies behind a flat
+	// piece
+	if ( meshData != NULL && def->seedTriangles )
 	{
 		meshDef.clockWiseWinding = flip > 0.0f;
 		ctx->meshInside = b3CreateMesh( &meshDef, NULL, 0 );
@@ -513,16 +506,10 @@ static void b3CreateMergeGrid( b3MergeContext* ctx, b3AABB bounds )
 // The deepest open space a hull seals: the deepest run of any outward sample ray inside the hull.
 // A sample outside the hull does not see it. A sample on a hull face that follows the surface
 // leaves at once, so a hull that hugs the source mesh scores zero.
-// Stops early and returns a value over the limit once the limit is passed. worstSample, if asked
-// for, receives the sample with the deepest run, or -1.
-static float b3ComputeHullConcavity( const b3MergeContext* ctx, const b3HullData* hull, float limit,
-									 int* worstSample )
+// Stops early and returns a value over the limit once the limit is passed.
+static float b3ComputeHullConcavity( const b3MergeContext* ctx, const b3HullData* hull,
+									 float limit )
 {
-	if ( worstSample != NULL )
-	{
-		*worstSample = -1;
-	}
-
 	const b3Plane* planes = b3GetHullPlanes( hull );
 	int planeCount = hull->faceCount;
 	float tolerance = ctx->tolerance;
@@ -590,11 +577,6 @@ static float b3ComputeHullConcavity( const b3MergeContext* ctx, const b3HullData
 					if ( depth > concavity )
 					{
 						concavity = depth;
-						if ( worstSample != NULL )
-						{
-							*worstSample = ctx->cellSamples[i];
-						}
-
 						if ( concavity > limit )
 						{
 							return concavity;
@@ -971,7 +953,7 @@ static float b3ComputeShapeConcavity( const b3MergeContext* ctx, const b3MergeSh
 {
 	if ( shape->hull != NULL )
 	{
-		return b3ComputeHullConcavity( ctx, shape->hull, limit, NULL );
+		return b3ComputeHullConcavity( ctx, shape->hull, limit );
 	}
 
 	// A flat shape gives the sample rays nothing to run through. What it closes over is the area
@@ -1124,392 +1106,6 @@ static void b3MergeNodes( b3MergeContext* ctx, const b3MergeCandidate* candidate
 	}
 }
 
-// Is the point inside the solid? A ray from it leaves the solid before it enters it. Three rays
-// vote, so one that grazes an edge does not decide.
-static bool b3IsInsideSolid( const b3MergeContext* ctx, b3Vec3 point )
-{
-	static const b3Vec3 directions[3] = {
-		{ 0.0137f, 0.3113f, 0.9502f },
-		{ -0.8249f, -0.5648f, 0.0241f },
-		{ 0.5713f, -0.2001f, -0.7960f },
-	};
-
-	b3Mesh outside = { ctx->mesh, { 1.0f, 1.0f, 1.0f } };
-	b3Mesh inside = { ctx->meshInside, { 1.0f, 1.0f, 1.0f } };
-	int votes = 0;
-	for ( int i = 0; i < 3; ++i )
-	{
-		b3RayCastInput input;
-		input.origin = point;
-		input.translation = b3MulSV( ctx->reach, directions[i] );
-		input.maxFraction = 1.0f;
-		b3CastOutput enter = b3RayCastMesh( &outside, &input );
-		b3CastOutput leave = b3RayCastMesh( &inside, &input );
-		if ( leave.hit && ( enter.hit == false || leave.fraction < enter.fraction ) )
-		{
-			votes += 1;
-		}
-	}
-
-	return votes >= 2;
-}
-
-// The points of the solid inside a hull, gathered triangle by triangle
-typedef struct b3FitQuery
-{
-	const b3Plane* planes;
-	int planeCount;
-
-	// How far inside the hull the surface has to be to count
-	float margin;
-	b3Vec3* points;
-	int count;
-	int capacity;
-} b3FitQuery;
-
-static void b3AddFitPoint( b3FitQuery* query, b3Vec3 point )
-{
-	if ( query->count == query->capacity )
-	{
-		int capacity = query->capacity < 256 ? 256 : 2 * query->capacity;
-		query->points = B3_GROW( query->points, (size_t)query->capacity, (size_t)capacity );
-		query->capacity = capacity;
-	}
-
-	query->points[query->count++] = point;
-}
-
-// Clip a source triangle to the hull and keep the corners of what is left
-static bool b3FitTriangleCallback( b3Vec3 a, b3Vec3 b, b3Vec3 c, int triangleIndex, void* context )
-{
-	B3_UNUSED( triangleIndex );
-
-	enum
-	{
-		capacity = B3_MAX_HULL_FACES + 4
-	};
-
-	b3FitQuery* query = context;
-	b3Vec3 buffers[2][capacity];
-	b3Vec3* in = buffers[0];
-	b3Vec3* out = buffers[1];
-	in[0] = a;
-	in[1] = b;
-	in[2] = c;
-	int count = 3;
-
-	// Each plane can add one corner
-	for ( int i = 0; i < query->planeCount && count > 0; ++i )
-	{
-		b3Plane plane = query->planes[i];
-		int kept = 0;
-		for ( int j = 0; j < count; ++j )
-		{
-			b3Vec3 p = in[j];
-			b3Vec3 q = in[( j + 1 ) % count];
-			float dp = b3Dot( plane.normal, p ) - plane.offset + query->margin;
-			float dq = b3Dot( plane.normal, q ) - plane.offset + query->margin;
-			if ( dp <= 0.0f )
-			{
-				out[kept++] = p;
-			}
-
-			if ( ( dp <= 0.0f ) != ( dq <= 0.0f ) && kept < capacity )
-			{
-				out[kept++] = b3Lerp( p, q, dp / ( dp - dq ) );
-			}
-		}
-
-		b3Vec3* swap = in;
-		in = out;
-		out = swap;
-		count = kept;
-	}
-
-	for ( int i = 0; i < count; ++i )
-	{
-		b3AddFitPoint( query, in[i] );
-	}
-
-	return true;
-}
-
-// The hull of the solid inside a hull: the source surface clipped to it, and its own corners
-// that lie in the solid. Unlike the hull of a voxel piece it does not reach past the surface.
-// Surface that only touches the hull from outside is not in it: a face of the solid lying in
-// one of the hull's planes belongs to the hull on the solid's side of that plane alone. So the
-// surface is clipped a hair inside the hull, and a corner is judged a hair toward its middle.
-// Returns NULL if there is no solid in the hull to speak of.
-static b3HullData* b3FitHull( const b3MergeContext* ctx, const b3HullData* hull )
-{
-	b3FitQuery query = { 0 };
-	query.planes = b3GetHullPlanes( hull );
-	query.planeCount = hull->faceCount;
-	query.margin = ctx->tolerance;
-
-	b3Mesh mesh = { ctx->mesh, { 1.0f, 1.0f, 1.0f } };
-	b3QueryMesh( &mesh, b3AABB_Inflate( hull->aabb, ctx->tolerance ), b3FitTriangleCallback,
-				 &query );
-
-	const b3Vec3* corners = b3GetHullPoints( hull );
-	for ( int i = 0; i < hull->vertexCount; ++i )
-	{
-		b3Vec3 inward = b3Sub( hull->center, corners[i] );
-		float distance = b3Length( inward );
-		float step = b3MinFloat( 4.0f * ctx->tolerance, 0.5f * distance );
-		b3Vec3 probe =
-			distance > 0.0f ? b3MulAdd( corners[i], step / distance, inward ) : corners[i];
-		if ( b3IsInsideSolid( ctx, probe ) )
-		{
-			b3AddFitPoint( &query, corners[i] );
-		}
-	}
-
-	b3HullData* fitted =
-		query.count >= 4 ? b3CreateHull( query.points, query.count, ctx->maxHullVertices ) : NULL;
-	b3Free( query.points, (size_t)query.capacity * sizeof( b3Vec3 ) );
-	return fitted;
-}
-
-// The two parts of a hull on either side of a plane. A part with no volume comes back NULL.
-static void b3SplitHull( const b3MergeContext* ctx, const b3HullData* hull, b3Plane plane,
-						 b3HullData** below, b3HullData** above )
-{
-	const b3Vec3* points = b3GetHullPoints( hull );
-	const b3HullHalfEdge* edges = b3GetHullEdges( hull );
-	int capacity = hull->vertexCount + hull->edgeCount / 2;
-	b3Vec3* parts = b3Alloc( (size_t)( 2 * capacity ) * sizeof( b3Vec3 ) );
-	b3Vec3* lower = parts;
-	b3Vec3* upper = parts + capacity;
-	int lowerCount = 0, upperCount = 0;
-
-	for ( int i = 0; i < hull->vertexCount; ++i )
-	{
-		float distance = b3Dot( plane.normal, points[i] ) - plane.offset;
-		if ( distance <= ctx->tolerance )
-		{
-			lower[lowerCount++] = points[i];
-		}
-
-		if ( distance >= -ctx->tolerance )
-		{
-			upper[upperCount++] = points[i];
-		}
-	}
-
-	// Each edge that crosses the plane gives both parts a corner
-	for ( int i = 0; i < hull->edgeCount; ++i )
-	{
-		if ( edges[i].twin < i )
-		{
-			continue;
-		}
-
-		b3Vec3 p = points[edges[i].origin];
-		b3Vec3 q = points[edges[edges[i].twin].origin];
-		float dp = b3Dot( plane.normal, p ) - plane.offset;
-		float dq = b3Dot( plane.normal, q ) - plane.offset;
-		if ( ( dp < -ctx->tolerance && dq > ctx->tolerance ) ||
-			 ( dp > ctx->tolerance && dq < -ctx->tolerance ) )
-		{
-			b3Vec3 crossing = b3Lerp( p, q, dp / ( dp - dq ) );
-			lower[lowerCount++] = crossing;
-			upper[upperCount++] = crossing;
-		}
-	}
-
-	*below = lowerCount >= 4 ? b3CreateHull( lower, lowerCount, ctx->maxHullVertices ) : NULL;
-	*above = upperCount >= 4 ? b3CreateHull( upper, upperCount, ctx->maxHullVertices ) : NULL;
-	b3Free( parts, (size_t)( 2 * capacity ) * sizeof( b3Vec3 ) );
-}
-
-// Cut a node that seals too much in two, each part fitted to the solid again. The cut goes
-// through the sample with the deepest run: along the surface there, which takes an L apart at
-// its inner corner, or across the surface, along or across the length of the piece, which
-// halves a piece bent around a hollow. A cut is judged by what its parts seal, each weighed by
-// its volume, so a cut that frees one part cleanly counts even while the other part still seals
-// as much: that part is cut again. Returns false if no cut makes the piece better.
-static bool b3SplitNode( b3MergeContext* ctx, int index )
-{
-	const b3HullData* hull = ctx->nodes[index].hull;
-	int worst;
-	float concavity = b3ComputeHullConcavity( ctx, hull, FLT_MAX, &worst );
-	if ( worst < 0 )
-	{
-		return false;
-	}
-
-	b3Vec3 point = ctx->samples[worst].point;
-	b3Vec3 normal = ctx->samples[worst].normal;
-
-	// The long direction of the piece in the plane of the surface
-	b3Vec3 u = b3Perp( normal );
-	b3Vec3 v = b3Cross( normal, u );
-	const b3Vec3* corners = b3GetHullPoints( hull );
-	float sxx = 0.0f, sxy = 0.0f, syy = 0.0f;
-	for ( int i = 0; i < hull->vertexCount; ++i )
-	{
-		b3Vec3 d = b3Sub( corners[i], hull->center );
-		float x = b3Dot( d, u );
-		float y = b3Dot( d, v );
-		sxx += x * x;
-		sxy += x * y;
-		syy += y * y;
-	}
-
-	float angle = 0.5f * atan2f( 2.0f * sxy, sxx - syy );
-	b3Vec3 along = b3Add( b3MulSV( cosf( angle ), u ), b3MulSV( sinf( angle ), v ) );
-	b3Vec3 across = b3Cross( normal, along );
-	b3Vec3 cuts[3] = { normal, along, across };
-
-	b3HullData* best[2] = { NULL, NULL };
-	float bestConcavities[2] = { 0.0f, 0.0f };
-	float bestScore = FLT_MAX;
-	for ( int i = 0; i < 3; ++i )
-	{
-		b3Plane plane = { cuts[i], b3Dot( cuts[i], point ) };
-		b3HullData* halves[2];
-		b3SplitHull( ctx, hull, plane, halves + 0, halves + 1 );
-
-		float concavities[2] = { 0.0f, 0.0f };
-		for ( int j = 0; j < 2; ++j )
-		{
-			if ( halves[j] == NULL )
-			{
-				continue;
-			}
-
-			b3HullData* fitted = b3FitHull( ctx, halves[j] );
-			b3DestroyHull( halves[j] );
-			halves[j] = fitted;
-			if ( fitted != NULL )
-			{
-				concavities[j] = b3ComputeHullConcavity( ctx, fitted, FLT_MAX, NULL );
-			}
-		}
-
-		float score = 0.0f;
-		for ( int j = 0; j < 2; ++j )
-		{
-			score += halves[j] != NULL ? concavities[j] * halves[j]->volume : 0.0f;
-		}
-
-		bool usable = halves[0] != NULL || halves[1] != NULL;
-		if ( usable && score < bestScore )
-		{
-			for ( int j = 0; j < 2; ++j )
-			{
-				if ( best[j] != NULL )
-				{
-					b3DestroyHull( best[j] );
-				}
-
-				best[j] = halves[j];
-				bestConcavities[j] = concavities[j];
-			}
-
-			bestScore = score;
-		}
-		else
-		{
-			for ( int j = 0; j < 2; ++j )
-			{
-				if ( halves[j] != NULL )
-				{
-					b3DestroyHull( halves[j] );
-				}
-			}
-		}
-	}
-
-	if ( bestScore > 0.9f * concavity * hull->volume )
-	{
-		for ( int j = 0; j < 2; ++j )
-		{
-			if ( best[j] != NULL )
-			{
-				b3DestroyHull( best[j] );
-			}
-		}
-
-		return false;
-	}
-
-	// The node becomes one part, the other part is a new node
-	int first = best[0] != NULL ? 0 : 1;
-	b3MergeNode* node = ctx->nodes + index;
-	b3DestroyHull( node->hull );
-	node->hull = best[first];
-	node->concavity = bestConcavities[first];
-	node->floor = node->concavity;
-	node->splitDepth += 1;
-
-	if ( first == 0 && best[1] != NULL )
-	{
-		if ( ctx->nodeCount == ctx->nodeCapacity )
-		{
-			int capacity = 2 * ctx->nodeCapacity;
-			ctx->nodes = B3_GROW_ZERO( ctx->nodes, (size_t)ctx->nodeCapacity, (size_t)capacity );
-			ctx->nodeCapacity = capacity;
-		}
-
-		b3MergeNode* other = ctx->nodes + ctx->nodeCount++;
-		*other = ( b3MergeNode ){ 0 };
-		other->hull = best[1];
-		other->concavity = bestConcavities[1];
-		other->floor = other->concavity;
-		other->splitDepth = ctx->nodes[index].splitDepth;
-		other->alive = true;
-	}
-
-	return true;
-}
-
-// Fit every piece to the solid inside it, then cut the ones that still seal more than the
-// target until they no longer do, or cutting stops helping.
-static void b3FitAndSplitNodes( b3MergeContext* ctx, float target )
-{
-	if ( ctx->mesh == NULL || ctx->meshInside == NULL )
-	{
-		return;
-	}
-
-	int count = 0;
-	for ( int i = 0; i < ctx->nodeCount; ++i )
-	{
-		b3HullData* piece = ctx->nodes[i].hull;
-		b3HullData* fitted = b3FitHull( ctx, piece );
-		b3DestroyHull( piece );
-		ctx->nodes[i] = ( b3MergeNode ){ 0 };
-		if ( fitted == NULL )
-		{
-			// A piece with no solid in it
-			continue;
-		}
-
-		b3MergeNode* node = ctx->nodes + count++;
-		node->hull = fitted;
-		node->concavity = b3ComputeHullConcavity( ctx, fitted, FLT_MAX, NULL );
-		node->floor = node->concavity;
-		node->alive = true;
-	}
-
-	ctx->nodeCount = count;
-
-	int limit = ctx->nodeCount + B3_MERGE_MAX_SPLIT_NODES;
-	for ( int i = 0; i < ctx->nodeCount; ++i )
-	{
-		while ( ctx->nodes[i].concavity > target &&
-				ctx->nodes[i].splitDepth < B3_MERGE_MAX_SPLIT_DEPTH && ctx->nodeCount < limit )
-		{
-			if ( b3SplitNode( ctx, i ) == false )
-			{
-				break;
-			}
-		}
-	}
-}
-
 // One flat node for every triangle of the source mesh
 static void b3SeedTriangleNodes( b3MergeContext* ctx, const b3ConvexMergeDef* def )
 {
@@ -1589,7 +1185,7 @@ static b3HullData* b3SolidifyNode( const b3MergeContext* ctx, const b3MergeNode*
 			return NULL;
 		}
 
-		float sealed = b3ComputeHullConcavity( ctx, hull, FLT_MAX, NULL );
+		float sealed = b3ComputeHullConcavity( ctx, hull, FLT_MAX );
 		if ( sealed <= ctx->maxConcavity || depth <= minDepth )
 		{
 			*concavity = b3MaxFloat( sealed, node->concavity );
@@ -1708,9 +1304,8 @@ static bool b3IsMergeDefValid( const b3ConvexMergeDef* def )
 }
 
 // Build what every merge of a definition shares: the samples, their grid, one node per piece
-// and the links between neighbors. tightestLimit is the least the merge will be held to.
-static bool b3CreateMergeContext( b3MergeContext* ctx, const b3ConvexMergeDef* def,
-								  float tightestLimit )
+// and the links between neighbors.
+static bool b3CreateMergeContext( b3MergeContext* ctx, const b3ConvexMergeDef* def )
 {
 	b3AABB bounds = { def->meshVertices[0], def->meshVertices[0] };
 	for ( int i = 1; i < def->meshVertexCount; ++i )
@@ -1774,14 +1369,9 @@ static bool b3CreateMergeContext( b3MergeContext* ctx, const b3ConvexMergeDef* d
 
 			b3MergeNode* node = ctx->nodes + ctx->nodeCount++;
 			node->hull = hull;
-			node->concavity = b3ComputeHullConcavity( ctx, hull, FLT_MAX, NULL );
+			node->concavity = b3ComputeHullConcavity( ctx, hull, FLT_MAX );
 			node->floor = node->concavity;
 			node->alive = true;
-		}
-
-		if ( def->enableSplit )
-		{
-			b3FitAndSplitNodes( ctx, tightestLimit );
 		}
 	}
 
@@ -2057,7 +1647,7 @@ b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def )
 	int stepCount = b3GetMergeLimits( def, limits );
 
 	b3MergeContext ctx;
-	if ( b3CreateMergeContext( &ctx, def, limits[0] ) == false )
+	if ( b3CreateMergeContext( &ctx, def ) == false )
 	{
 		return NULL;
 	}

@@ -2367,21 +2367,13 @@ typedef struct b3ConvexMergeDef
 	/// maxConcavity. Clamped to [1, 64]. Not used without enableSweep.
 	int sweepSteps;
 
-	/// Experimental. Fit each piece to the mesh before merging, and cut the pieces that seal more
-	/// than the tightest limit. A piece becomes the hull of the solid inside it, so it stops
-	/// reaching past the surface, and a merge is no longer held to what the pieces sealed as they
-	/// came. Cutting is not a promise: a piece is cut at most 6 times over, all the cutting adds
-	/// at most 4096 pieces, and a piece that no cut makes better is left as it is, so a piece can
-	/// still seal more than the limit. Not used with seedTriangles, which has no pieces to cut.
-	bool enableSplit;
-
 	/// Start from the triangles of the mesh instead of from pieces, as HACD does: every triangle
 	/// is a flat piece, and triangles whose bounding boxes touch are neighbors. That takes in the
 	/// triangles that share an edge or a corner, and now and then a pair that only comes close.
 	/// Nothing is voxelized, so every piece starts on the surface. The hulls follow the surface,
 	/// though, so the inside of a thick solid can stay uncovered, and the time grows with the
 	/// triangle count. This is the default. With it the pieces of the definition are not used and
-	/// may be left out, and enableSplit does nothing. Turn it off to merge pieces of your own,
+	/// may be left out. Turn it off to merge pieces of your own,
 	/// such as those of a voxel decomposition.
 	bool seedTriangles;
 

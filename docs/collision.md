@@ -220,8 +220,8 @@ every step of a sweep, and `result->maxConcavity` reports what that cost. The so
 should be closed. Either winding works.
 
 To merge pieces of your own instead, turn `seedTriangles` off and hand them over. This is
-for the pieces of a volumetric decomposition such as V-HACD, which covers the whole volume
-of the solid and takes the same time whatever the triangle count. Such a decomposition
+for the pieces of a volumetric decomposition such as V-HACD, which fills the inside of the
+solid and takes about the same time whatever the triangle count. Such a decomposition
 merges its pieces by volume, where an opening is cheap, so give it a generous hull budget
 to get its pieces unmerged and let this merge decide how many hulls remain:
 
@@ -230,15 +230,10 @@ def.seedTriangles = false;
 def.piecePoints = piecePoints;        // all pieces back to back
 def.pieceOffsets = pieceOffsets;      // pieceCount + 1 offsets into piecePoints
 def.pieceCount = pieceCount;
-def.enableSplit = true;               // experimental, see below
 ```
 
 A voxel piece reaches past the surface by about a voxel, and a merge can only be as tight
-as its pieces. `enableSplit` is experimental and off by default. It makes each piece the
-hull of the solid inside it, then cuts any piece that still seals more than the tightest
-limit, through the sample with the deepest run. A piece is cut at most 6 times over, and
-one that no cut makes better is left, so a piece can still seal more than the limit. It
-does nothing with `seedTriangles`, which has no pieces to cut.
+as its pieces: what a piece seals as it comes, the merged hulls seal too.
 
 ### Triangle Meshes
 
