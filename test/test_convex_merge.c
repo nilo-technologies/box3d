@@ -110,10 +110,11 @@ static void MakePieces( WallPieces* pieces )
 	pieces->offsets[PIECE_COUNT] = 8 * PIECE_COUNT;
 }
 
-// The wall with the defaults: the limit is found by a sweep
+// The pieces of the wall, merged with the defaults otherwise: the limit is found by a sweep
 static b3ConvexMergeDef MakeSweepDef( const WallMesh* wall, const WallPieces* pieces )
 {
 	b3ConvexMergeDef def = b3DefaultConvexMergeDef();
+	def.seedTriangles = false;
 	def.meshVertices = wall->vertices;
 	def.meshIndices = wall->indices;
 	def.meshVertexCount = WALL_VERTEX_COUNT;
@@ -498,6 +499,8 @@ static int SweepIsTheDefault( void )
 {
 	b3ConvexMergeDef defaults = b3DefaultConvexMergeDef();
 	ENSURE( defaults.enableSweep );
+	ENSURE( defaults.seedTriangles );
+	ENSURE( defaults.enableSplit == false );
 	ENSURE( defaults.sweepSteps == 9 );
 	ENSURE( defaults.hullWeight == 1.0f );
 	ENSURE( defaults.minConcavity == 0.0f && defaults.maxConcavity == 0.0f );
@@ -870,36 +873,58 @@ static int SeedTrianglesKeepsDoorwayOpen( void )
 	return 0;
 }
 
-// Sampling by spacing: the sample count follows from the area of the mesh and the limit.
-static int SampleSpacingFollowsLimit( void )
+// The default needs nothing but the mesh: the merge starts from its triangles and finds its limit.
+static int DefaultNeedsOnlyTheMesh( void )
 {
 	WallMesh wall;
-	WallPieces pieces;
 	MakeWall( &wall, false );
-	MakePieces( &pieces );
 
-	b3ConvexMergeDef def = MakeSweepDef( &wall, &pieces );
-	def.sampleSpacing = 1.0f;
+	b3ConvexMergeDef def = b3DefaultConvexMergeDef();
+	def.meshVertices = wall.vertices;
+	def.meshIndices = wall.indices;
+	def.meshVertexCount = WALL_VERTEX_COUNT;
+	def.meshTriangleCount = WALL_TRIANGLE_COUNT;
+
 	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
 	ENSURE( result != NULL );
+	ENSURE( result->stepCount == 9 );
 	ENSURE( result->pieceCount == 3 );
+	ENSURE_SMALL( result->maxConcavity, 1e-3f );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ -1.2f, 1.0f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 2.6f, 0.0f } ) );
 	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
-	b3DestroyConvexMergeResult( result );
+	ENSURE_SMALL( GetVolume( result ) - 2.97f, 1e-3f );
 
-	// A spacing that is not a number, or a limit of zero to space by, falls back to the count
-	def.sampleSpacing = NAN;
-	result = b3MergeConvexPieces( &def );
-	ENSURE( result != NULL );
-	ENSURE( result->pieceCount == 3 );
-	b3DestroyConvexMergeResult( result );
+	// Pieces given with it are not used
+	WallPieces pieces;
+	MakePieces( &pieces );
+	b3Vec3 box[8];
+	for ( int j = 0; j < 8; ++j )
+	{
+		box[j] = ( b3Vec3 ){ ( j & 1 ) ? 2.0f : -2.0f, ( j & 2 ) ? 3.0f : 0.0f,
+							 ( j & 4 ) ? 0.15f : -0.15f };
+	}
 
-	def = MakeWallDef( &wall, &pieces );
-	def.maxConcavity = 0.0f;
-	def.sampleSpacing = 1.0f;
-	result = b3MergeConvexPieces( &def );
-	ENSURE( result != NULL );
-	ENSURE( result->pieceCount == 3 );
+	int32_t offsets[2] = { 0, 8 };
+	def.piecePoints = box;
+	def.pieceOffsets = offsets;
+	def.pieceCount = 1;
+	b3ConvexMergeResult* again = b3MergeConvexPieces( &def );
+	ENSURE( again != NULL );
+	ENSURE( IsSameResult( result, again ) );
+
+	// The same twice
+	b3ConvexMergeResult* twice = b3MergeConvexPieces( &def );
+	ENSURE( twice != NULL );
+	ENSURE( IsSameResult( result, twice ) );
+
 	b3DestroyConvexMergeResult( result );
+	b3DestroyConvexMergeResult( again );
+	b3DestroyConvexMergeResult( twice );
+
+	// A mesh is still needed
+	def.meshIndices = NULL;
+	ENSURE( b3MergeConvexPieces( &def ) == NULL );
 	return 0;
 }
 
@@ -922,7 +947,7 @@ int ConvexMergeTest( void )
 	RUN_SUBTEST( SweepIsRepeatable );
 	RUN_SUBTEST( SplitOpensDoorway );
 	RUN_SUBTEST( SeedTrianglesKeepsDoorwayOpen );
-	RUN_SUBTEST( SampleSpacingFollowsLimit );
+	RUN_SUBTEST( DefaultNeedsOnlyTheMesh );
 
 	return 0;
 }

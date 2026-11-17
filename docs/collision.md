@@ -126,27 +126,23 @@ stack/struct-allocated and must not be freed.
 
 #### Merging Convex Pieces
 
-A concave object collides as a set of convex hulls. A volumetric convex decomposition
-such as V-HACD cuts the object into many small convex pieces and then merges them down
-to a hull budget by volume. An opening is cheap in volume, so that merge can close a
-doorway or a window. `b3MergeConvexPieces` merges the pieces against the source mesh
-instead, so a merged hull only seals as much open space as its limit allows:
+A concave object collides as a set of convex hulls. `b3MergeConvexPieces` makes those hulls
+from a triangle mesh. It starts from small convex pieces and merges neighbors while the
+merged hull stays close to the mesh, so a hull does not close over a doorway or a window.
+By default the pieces are the triangles of the mesh itself, and the mesh is all it needs:
 
 ```c
 b3ConvexMergeDef def = b3DefaultConvexMergeDef();
-def.meshVertices = meshVertices;      // the mesh the pieces were cut from
+def.meshVertices = meshVertices;
 def.meshIndices = meshIndices;
 def.meshVertexCount = meshVertexCount;
 def.meshTriangleCount = meshTriangleCount;
-def.piecePoints = piecePoints;        // all pieces back to back
-def.pieceOffsets = pieceOffsets;      // pieceCount + 1 offsets into piecePoints
-def.pieceCount = pieceCount;
 
 b3ConvexMergeResult* result = b3MergeConvexPieces(&def);
 if (result == NULL)
 {
     // invalid definition: a missing array, a triangle index past the vertices,
-    // offsets that run backwards, or a mesh with no extent
+    // or a mesh with no extent
     return;
 }
 for (int i = 0; i < result->pieceCount; ++i)
@@ -167,8 +163,21 @@ surface, so a doorway reads as its width while a sliver of hull lying against a 
 as its thickness. Neighboring pieces merge cheapest first, the way HACD collapses the
 edges of its dual graph.
 
-How many hulls a mesh needs depends on the limit on that depth, and the right limit is
-rarely known up front. By default the merge finds it with a sweep (`enableSweep`): the
+Starting from the triangles (`seedTriangles`, the default) is HACD as Roblox describes it
+in "A Search for Better Convex Decomposition". Every triangle is a flat piece, and
+triangles whose bounding boxes touch are neighbors. Flat pieces in one plane merge as
+polygons, priced by the area they add to their triangles, until a merge takes them out of
+the plane. Nothing is voxelized, so every piece starts on the surface instead of a voxel
+past it, and a mesh made of flat faces comes apart exactly. A piece still flat at the end
+is pushed into the solid to make it a hull. Two things to know:
+
+- The hulls follow the surface, so the inside of a thick solid can stay uncovered. A
+  thick curved wall is where that shows.
+- The time grows with the triangle count. A few thousand triangles take a fraction of a
+  second, a hundred thousand take seconds.
+
+How many hulls a mesh needs depends on the limit on the sealed depth, and the right limit
+is rarely known up front. By default the merge finds it with a sweep (`enableSweep`): the
 pieces are merged at a series of loosening limits, and the step with the best trade
 between few hulls and little sealed is returned. Each limit carries on from the hulls the
 one before left. The samples and the neighbor graph are built once, so the whole series
@@ -196,7 +205,7 @@ for (int i = 0; i < result->stepCount; ++i)
 The chosen step is a heuristic. Hull count and sealed depth are each scaled by their
 largest value over the steps, and the step nearest to no hulls and nothing sealed wins. It
 moves with the range swept, and it is not the fewest hulls possible: the merge is greedy
-and can only join the pieces it was given.
+and can only join the pieces it started from.
 
 To merge to a limit of your own, turn the sweep off. `maxConcavity` is then the limit:
 
@@ -206,36 +215,30 @@ def.maxConcavity = 0.05f * b3GetLengthUnitsPerMeter(); // a hull may seal 5 cm o
 def.maxHullCount = 32;                                 // optional budget, 0 for none
 ```
 
-Give the decomposition a generous hull budget so it hands over its pieces unmerged, then
-let the limit decide how many hulls remain. With `maxHullCount` set, merging continues
-past the limit until the budget is met, at every step of a sweep, and
-`result->maxConcavity` reports what that cost. The source mesh should be closed. Either
-winding works.
+With `maxHullCount` set, merging continues past the limit until the budget is met, at
+every step of a sweep, and `result->maxConcavity` reports what that cost. The source mesh
+should be closed. Either winding works.
 
-Three options are experimental. They are off by default, and are being measured against
-each other before any of them stays:
+To merge pieces of your own instead, turn `seedTriangles` off and hand them over. This is
+for the pieces of a volumetric decomposition such as V-HACD, which covers the whole volume
+of the solid and takes the same time whatever the triangle count. Such a decomposition
+merges its pieces by volume, where an opening is cheap, so give it a generous hull budget
+to get its pieces unmerged and let this merge decide how many hulls remain:
 
 ```c
-def.enableSplit = true;    // fit the pieces to the mesh, and cut the ones that seal too much
-def.sampleSpacing = 1.0f;  // space the samples by the tightest limit instead of counting them
-def.seedTriangles = true;  // no pieces: start from the triangles of the mesh
+def.seedTriangles = false;
+def.piecePoints = piecePoints;        // all pieces back to back
+def.pieceOffsets = pieceOffsets;      // pieceCount + 1 offsets into piecePoints
+def.pieceCount = pieceCount;
+def.enableSplit = true;               // experimental, see below
 ```
 
-- A voxel piece reaches past the surface by about a voxel, and a merge can only be as tight
-  as its pieces. `enableSplit` makes each piece the hull of the solid inside it, then cuts
-  any piece that still seals more than the tightest limit, through the sample with the
-  deepest run. A piece is cut at most 6 times over, and one that no cut makes better is
-  left, so a piece can still seal more than the limit.
-- `sampleSpacing` sets the distance between sample points as a multiple of the tightest
-  limit, so the sample count follows from the area of the mesh. With a tightest limit of
-  zero there is nothing to space by, and `sampleCount` is used.
-- `seedTriangles` is HACD as the Roblox article describes it: every triangle starts as a
-  flat piece, triangles whose bounding boxes touch are neighbors, and pieces in one plane
-  merge as polygons until they leave it. No voxels are involved, so every piece starts on
-  the surface instead of a voxel past it. A merged hull can still seal open space, up to
-  the limit. The hulls follow the surface, and the inside of a thick solid can stay
-  uncovered. A piece still flat at the end is pushed into the solid to make it a hull.
-  `enableSplit` does nothing here: there are no pieces to cut.
+A voxel piece reaches past the surface by about a voxel, and a merge can only be as tight
+as its pieces. `enableSplit` is experimental and off by default. It makes each piece the
+hull of the solid inside it, then cuts any piece that still seals more than the tightest
+limit, through the sample with the deepest run. A piece is cut at most 6 times over, and
+one that no cut makes better is left, so a piece can still seal more than the limit. It
+does nothing with `seedTriangles`, which has no pieces to cut.
 
 ### Triangle Meshes
 

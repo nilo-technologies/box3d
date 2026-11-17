@@ -19,6 +19,11 @@
 // source surface while inside the hull. A doorway still reads as its full width, a sliver as
 // its thickness.
 //
+// The pieces need not come from a voxel decomposition, and by default they do not: every triangle
+// of the mesh starts as a flat piece, as in HACD and in the Roblox article, which gives up voxels
+// because they snap surfaces to a grid. Flat pieces in one plane merge as polygons, priced by
+// the area they add to their triangles, until a merge takes them out of the plane.
+//
 // How many hulls a mesh needs depends on the limit, and the right limit is rarely known up front.
 // By default the merge therefore sweeps it: the pieces are merged at a series of loosening
 // limits, each carrying on from the hulls the one before left, and the step with the best trade
@@ -206,9 +211,8 @@ b3ConvexMergeDef b3DefaultConvexMergeDef( void )
 	def.maxHullVertices = 32;
 	def.sampleCount = 8192;
 	def.sweepSteps = 9;
-	def.sampleSpacing = 0.0f;
 	def.enableSplit = false;
-	def.seedTriangles = false;
+	def.seedTriangles = true;
 	def.enableSweep = true;
 	return def;
 }
@@ -284,8 +288,7 @@ static float b3SealedDepth( const b3MergeContext* ctx, const b3MergeSample* samp
 
 // Samples spread over the mesh by area, plus one at the centroid of every triangle while the
 // mesh is small enough, so a sliver that the area walk steps over still has a say.
-static void b3CreateMergeSamples( b3MergeContext* ctx, const b3ConvexMergeDef* def, b3AABB bounds,
-								  float tightestLimit )
+static void b3CreateMergeSamples( b3MergeContext* ctx, const b3ConvexMergeDef* def, b3AABB bounds )
 {
 	const b3Vec3* vertices = def->meshVertices;
 	const int32_t* indices = def->meshIndices;
@@ -316,15 +319,6 @@ static void b3CreateMergeSamples( b3MergeContext* ctx, const b3ConvexMergeDef* d
 	float flip = signedVolume < 0.0 ? -1.0f : 1.0f;
 	ctx->flip = flip;
 	int areaSampleCount = b3ClampInt( def->sampleCount, 64, 1 << 20 );
-	if ( def->sampleSpacing > 0.0f && tightestLimit > 0.0f )
-	{
-		// One sample for every square of the spacing
-		double spacing = (double)def->sampleSpacing * (double)tightestLimit;
-		double wanted = totalArea / ( spacing * spacing );
-		areaSampleCount =
-			wanted < 64.0 ? 64 : ( wanted > (double)( 1 << 20 ) ? 1 << 20 : (int)wanted );
-	}
-
 	bool addCentroids = triangleCount <= areaSampleCount;
 	int capacity = areaSampleCount + ( addCentroids ? triangleCount : 0 ) + 1;
 	ctx->samples = b3Alloc( (size_t)capacity * sizeof( b3MergeSample ) );
@@ -1642,6 +1636,33 @@ static void b3DestroyMergeContext( b3MergeContext* ctx )
 	b3Free( ctx->samples, (size_t)ctx->sampleCapacity * sizeof( b3MergeSample ) );
 }
 
+// A neighbor search: the node asking, and the context its links go into
+typedef struct b3MergeNeighborQuery
+{
+	b3MergeContext* ctx;
+	int index;
+} b3MergeNeighborQuery;
+
+// Link a node to a neighbor the tree found. Each pair is linked once, from its lower node.
+static bool b3MergeNeighborCallback( int proxyId, uint64_t userData, void* context )
+{
+	B3_UNUSED( proxyId );
+
+	b3MergeNeighborQuery* query = context;
+	b3MergeContext* ctx = query->ctx;
+	int i = query->index;
+	int j = (int)userData;
+	if ( j > i )
+	{
+		// The merged hull seals at least what its worse part seals
+		float concavity = b3MaxFloat( ctx->nodes[i].concavity, ctx->nodes[j].concavity );
+		b3SetLink( ctx->nodes + i, j, concavity, 0.0f );
+		b3SetLink( ctx->nodes + j, i, concavity, 0.0f );
+	}
+
+	return true;
+}
+
 // Is the definition fit to merge?
 static bool b3IsMergeDefValid( const b3ConvexMergeDef* def )
 {
@@ -1726,7 +1747,7 @@ static bool b3CreateMergeContext( b3MergeContext* ctx, const b3ConvexMergeDef* d
 
 	ctx->scratch = b3Alloc( (size_t)( 2 * B3_MAX_HULL_VERTICES ) * sizeof( b3Vec3 ) );
 
-	b3CreateMergeSamples( ctx, def, bounds, tightestLimit );
+	b3CreateMergeSamples( ctx, def, bounds );
 	b3CreateMergeGrid( ctx, bounds );
 
 	ctx->nodeCapacity = def->seedTriangles ? def->meshTriangleCount : def->pieceCount;
@@ -1768,30 +1789,28 @@ static bool b3CreateMergeContext( b3MergeContext* ctx, const b3ConvexMergeDef* d
 
 	// Pieces are neighbors when their boxes come within a margin of each other. A pair that only
 	// looks close costs one hull build and is then judged like any other. Triangles are
-	// neighbors when they touch.
+	// neighbors when their boxes touch. A tree over the boxes finds the pairs, so the search
+	// keeps up with a mesh of many triangles.
 	float margin = def->seedTriangles ? ctx->tolerance : 0.01f * diagonal;
-	b3AABB* boxes = b3Alloc( (size_t)b3MaxInt( ctx->nodeCount, 1 ) * sizeof( b3AABB ) );
+	b3DynamicTree tree = b3DynamicTree_Create( b3MaxInt( ctx->nodeCount, 1 ) );
 	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{
-		boxes[i] = b3GetNodeBounds( ctx->nodes + i );
+		b3DynamicTree_CreateProxy( &tree, b3GetNodeBounds( ctx->nodes + i ),
+								   B3_DEFAULT_CATEGORY_BITS, (uint64_t)i );
 	}
 
+	b3DynamicTree_Rebuild( &tree, true );
+
+	b3MergeNeighborQuery query = { ctx, 0 };
 	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{
-		b3AABB box = b3AABB_Inflate( boxes[i], margin );
-		for ( int j = i + 1; j < ctx->nodeCount; ++j )
-		{
-			if ( b3AABB_Overlaps( box, boxes[j] ) )
-			{
-				// The merged hull seals at least what its worse part seals
-				float concavity = b3MaxFloat( ctx->nodes[i].concavity, ctx->nodes[j].concavity );
-				b3SetLink( ctx->nodes + i, j, concavity, 0.0f );
-				b3SetLink( ctx->nodes + j, i, concavity, 0.0f );
-			}
-		}
+		query.index = i;
+		b3AABB box = b3AABB_Inflate( b3GetNodeBounds( ctx->nodes + i ), margin );
+		b3DynamicTree_Query( &tree, box, B3_DEFAULT_MASK_BITS, false, b3MergeNeighborCallback,
+							 &query );
 	}
 
-	b3Free( boxes, (size_t)b3MaxInt( ctx->nodeCount, 1 ) * sizeof( b3AABB ) );
+	b3DynamicTree_Destroy( &tree );
 	return true;
 }
 
