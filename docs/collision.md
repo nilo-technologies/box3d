@@ -224,14 +224,18 @@ def.seedTriangles = true;  // no pieces: start from the triangles of the mesh
 - A voxel piece reaches past the surface by about a voxel, and a merge can only be as tight
   as its pieces. `enableSplit` makes each piece the hull of the solid inside it, then cuts
   any piece that still seals more than the tightest limit, through the sample with the
-  deepest run.
+  deepest run. A piece is cut at most 6 times over, and one that no cut makes better is
+  left, so a piece can still seal more than the limit.
 - `sampleSpacing` sets the distance between sample points as a multiple of the tightest
-  limit, so the sample count follows from the area of the mesh.
+  limit, so the sample count follows from the area of the mesh. With a tightest limit of
+  zero there is nothing to space by, and `sampleCount` is used.
 - `seedTriangles` is HACD as the Roblox article describes it: every triangle starts as a
-  flat piece, triangles that touch are neighbors, and pieces in one plane merge as polygons
-  until they leave it. No voxels are involved, so nothing reaches past the surface. The
-  hulls follow the surface, though, and the inside of a thick solid can stay uncovered. A
-  piece still flat at the end is pushed into the solid to make it a hull.
+  flat piece, triangles whose bounding boxes touch are neighbors, and pieces in one plane
+  merge as polygons until they leave it. No voxels are involved, so every piece starts on
+  the surface instead of a voxel past it. A merged hull can still seal open space, up to
+  the limit. The hulls follow the surface, and the inside of a thick solid can stay
+  uncovered. A piece still flat at the end is pushed into the solid to make it a hull.
+  `enableSplit` does nothing here: there are no pieces to cut.
 
 ### Triangle Meshes
 

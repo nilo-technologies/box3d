@@ -2369,19 +2369,25 @@ typedef struct b3ConvexMergeDef
 	/// Experimental. Distance between the sample points on the source surface, as a multiple of the
 	/// tightest limit merged to. The sample count then follows from the surface area instead of
 	/// sampleCount, so the sampling keeps up with the size of what the limit is meant to catch.
-	/// Use 0 to sample by sampleCount.
+	/// That count is held between 64 and 1048576, so on a very small or very large surface the
+	/// spacing is not the one asked for. Use 0 to sample by sampleCount, which is also what
+	/// happens when the tightest limit is zero and there is nothing to space by.
 	float sampleSpacing;
 
 	/// Experimental. Fit each piece to the mesh before merging, and cut the pieces that seal more
-	/// than the tightest limit until they no longer do. A piece becomes the hull of the solid
-	/// inside it, so it stops reaching past the surface, and a merge is no longer held to what
-	/// the pieces sealed as they came.
+	/// than the tightest limit. A piece becomes the hull of the solid inside it, so it stops
+	/// reaching past the surface, and a merge is no longer held to what the pieces sealed as they
+	/// came. Cutting is not a promise: a piece is cut at most 6 times over, all the cutting adds
+	/// at most 4096 pieces, and a piece that no cut makes better is left as it is, so a piece can
+	/// still seal more than the limit. Not used with seedTriangles, which has no pieces to cut.
 	bool enableSplit;
 
 	/// Experimental. Start from the triangles of the mesh instead of from pieces, as HACD does:
-	/// every triangle is a flat piece, and pieces that share an edge are neighbors. The pieces
-	/// of the definition are not used and may be left out. The hulls follow the surface, so the
-	/// inside of a thick solid can stay uncovered.
+	/// every triangle is a flat piece, and triangles whose bounding boxes touch are neighbors.
+	/// That takes in the triangles that share an edge or a corner, and now and then a pair that
+	/// only comes close. The pieces of the definition are not used and may be left out, and
+	/// enableSplit does nothing. The hulls follow the surface, so the inside of a thick solid
+	/// can stay uncovered.
 	bool seedTriangles;
 
 	/// Find the limit instead of taking it. How many hulls a mesh needs depends on the limit, and
