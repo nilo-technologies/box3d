@@ -179,7 +179,8 @@ front. `b3SweepConvexPieces` merges the same pieces at a series of loosening lim
 pass and returns a result for each, so the hull count can be read against the limit:
 
 ```c
-float limits[] = { 0.02f, 0.05f, 0.1f, 0.2f };   // must not decrease
+float units = b3GetLengthUnitsPerMeter();
+float limits[] = { 0.02f * units, 0.05f * units, 0.1f * units, 0.2f * units };   // must not decrease
 b3ConvexMergeResult* results[4];
 if (b3SweepConvexPieces(&def, limits, 4, results))
 {

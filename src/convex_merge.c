@@ -947,8 +947,10 @@ static void b3RunMerge( b3MergeContext* ctx, float maxConcavity, int maxHullCoun
 	ctx->maxConcavity = b3MaxFloat( maxConcavity, 0.0f );
 	ctx->hasBudget = maxHullCount > 0;
 
-	// Queue every link afresh: what a merge may cost depends on the limit. The links keep what
-	// earlier pricing found, so nothing is measured twice.
+	// Queue every link afresh: what a merge may cost depends on the limit. Each link is queued on
+	// what earlier pricing found, a lower bound. A pair that bound already puts over the new
+	// limit is not built again. One within reach is priced again when it comes up, since its
+	// earlier measure stopped at the limit of the time.
 	ctx->heapCount = 0;
 	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{

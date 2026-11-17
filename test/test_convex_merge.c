@@ -495,6 +495,11 @@ static int SweepLoosensStepByStep( void )
 	b3ConvexMergeResult* single = b3MergeConvexPieces( &def );
 	ENSURE( single != NULL );
 	ENSURE( single->pieceCount == results[0]->pieceCount );
+	for ( int i = 0; i <= single->pieceCount; ++i )
+	{
+		ENSURE( single->offsets[i] == results[0]->offsets[i] );
+	}
+
 	for ( int i = 0; i < single->offsets[single->pieceCount]; ++i )
 	{
 		ENSURE( single->points[i].x == results[0]->points[i].x );
