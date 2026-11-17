@@ -395,7 +395,7 @@ typedef struct TractionUse
 	// Mean share of their peak drive force the driven tires carry
 	float share;
 
-	// Largest driven wheel slip ratio
+	// Largest driven wheel slip ratio, either way
 	float maxSlip;
 
 	// Seconds from rest to 60 km/h
@@ -443,7 +443,7 @@ static TractionUse MeasureTractionUse( void )
 				result.share += ws.longitudinalForce / peak;
 				result.samples += 1;
 			}
-			result.maxSlip = b3MaxFloat( result.maxSlip, ws.slipRatio );
+			result.maxSlip = b3MaxFloat( result.maxSlip, fabsf( ws.slipRatio ) );
 		}
 	}
 
