@@ -64,8 +64,9 @@
 // The queue is cleared of stale entries instead of growing past this size
 #define B3_MERGE_COMPACT_MIN 4096
 
-// The largest mesh diagonal the merge takes, so squared lengths stay finite in float
-#define B3_MERGE_MAX_DIAGONAL 1.0e18
+// The largest mesh diagonal the merge takes. A triangle's cross product grows with the square of
+// its size and its length is taken through squares again, which must stay finite in float.
+#define B3_MERGE_MAX_DIAGONAL 1.0e8
 
 // The range a sweep covers when the definition leaves it open, as fractions of the diagonal of
 // the mesh bounds
@@ -392,10 +393,12 @@ static void b3CreateMergeSamples( b3MergeContext* ctx, const b3ConvexMergeDef* d
 	float diagonal = b3Length( b3Sub( bounds.upperBound, bounds.lowerBound ) );
 	ctx->rayCenter = origin;
 	ctx->rayInvScale = 1.0f / diagonal;
-	b3Vec3* scaled = b3Alloc( (size_t)def->meshVertexCount * sizeof( b3Vec3 ) );
-	for ( int i = 0; i < def->meshVertexCount; ++i )
+	// Only the vertices a triangle uses: an unused one may be anything, even a NaN
+	b3Vec3* scaled = b3AllocZero( (size_t)def->meshVertexCount * sizeof( b3Vec3 ) );
+	for ( int i = 0; i < 3 * triangleCount; ++i )
 	{
-		scaled[i] = b3MulSV( ctx->rayInvScale, b3Sub( vertices[i], origin ) );
+		int index = indices[i];
+		scaled[index] = b3MulSV( ctx->rayInvScale, b3Sub( vertices[index], origin ) );
 	}
 
 	b3MeshDef meshDef = { 0 };
@@ -1583,11 +1586,24 @@ static void b3LinkSeedTriangles( b3MergeContext* ctx, const b3ConvexMergeDef* de
 	int vertexCount = def->meshVertexCount;
 	const b3Vec3* vertices = def->meshVertices;
 
+	// Only the vertices a triangle uses are welded: an unused one may be anything, even a NaN
+	bool* used = b3AllocZero( (size_t)vertexCount * sizeof( bool ) );
+	for ( int i = 0; i < 3 * def->meshTriangleCount; ++i )
+	{
+		used[def->meshIndices[i]] = true;
+	}
+
 	int* order = b3Alloc( (size_t)vertexCount * sizeof( int ) );
+	int usedCount = 0;
 	for ( int i = 0; i < vertexCount; ++i )
 	{
-		order[i] = i;
+		if ( used[i] )
+		{
+			order[usedCount++] = i;
+		}
 	}
+
+	b3Free( used, (size_t)vertexCount * sizeof( bool ) );
 
 #define LESS( i, j )                                                                               \
 	b3VertexLess( vertices[order[(int)( i )]], vertices[order[(int)( j )]], order[(int)( i )],     \
@@ -1600,13 +1616,13 @@ static void b3LinkSeedTriangles( b3MergeContext* ctx, const b3ConvexMergeDef* de
 		order[(int)( j )] = t_;                                                                    \
 	}                                                                                              \
 	while ( 0 )
-	QSORT( vertexCount, LESS, SWAP );
+	QSORT( usedCount, LESS, SWAP );
 #undef LESS
 #undef SWAP
 
-	int* weld = b3Alloc( (size_t)vertexCount * sizeof( int ) );
+	int* weld = b3AllocZero( (size_t)vertexCount * sizeof( int ) );
 	int weldId = 0;
-	for ( int i = 0; i < vertexCount; ++i )
+	for ( int i = 0; i < usedCount; ++i )
 	{
 		if ( i > 0 )
 		{

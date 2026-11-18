@@ -1032,7 +1032,7 @@ static int MergeRejectsNonFiniteInput( void )
 	b3Vec3 huge[WALL_VERTEX_COUNT];
 	for ( int i = 0; i < WALL_VERTEX_COUNT; ++i )
 	{
-		huge[i] = b3MulSV( 1.0e19f, wall.vertices[i] );
+		huge[i] = b3MulSV( 1.0e8f, wall.vertices[i] );
 	}
 
 	def.meshVertices = huge;
@@ -1049,6 +1049,13 @@ static int MergeRejectsNonFiniteInput( void )
 	def.meshVertices = vertices;
 	def.meshVertexCount = WALL_VERTEX_COUNT + 1;
 	b3ConvexMergeResult* stray = b3MergeConvexPieces( &def );
+	ENSURE( stray != NULL );
+	ENSURE( IsSameResult( reference, stray ) );
+	b3DestroyConvexMergeResult( stray );
+
+	// An unused vertex that is not even finite
+	vertices[WALL_VERTEX_COUNT] = ( b3Vec3 ){ nanf( "" ), INFINITY, 0.0f };
+	stray = b3MergeConvexPieces( &def );
 	ENSURE( stray != NULL );
 	ENSURE( IsSameResult( reference, stray ) );
 

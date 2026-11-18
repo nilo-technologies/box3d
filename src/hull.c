@@ -1109,6 +1109,11 @@ static void b3HullBuilder_ConnectFaces( b3HullBuilder* b, b3QHHalfEdge* edge )
 	b3HullBuilder_DestroyEdges( b, twinPrev->next, twinNext );
 
 	b3HullBuilder_ConnectEdges( b, edgePrev, twinNext );
+	if ( b->failed )
+	{
+		return;
+	}
+
 	b3HullBuilder_ConnectEdges( b, twinPrev, edgeNext );
 	if ( b->failed || b3NewellPlane( face ) == false )
 	{

@@ -2320,7 +2320,7 @@ typedef struct b3ConvexMergeDef
 	/// and wound one way. Either winding works, the outward side is found from the signed volume,
 	/// and both give the same hulls. It may be made of several closed parts, also parts that touch
 	/// or pass into each other. Vertices no triangle uses are ignored. Every vertex a triangle uses
-	/// must be finite, or the merge returns NULL.
+	/// must be finite and the mesh at most 1e8 length units across, or the merge returns NULL.
 	const int32_t* meshIndices;
 
 	/// Points of the convex pieces, all pieces back to back. Not used with seedTriangles.
