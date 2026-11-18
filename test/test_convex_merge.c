@@ -1118,6 +1118,31 @@ static int BudgetCrossesGaps( void )
 		}
 	}
 
+	// Posts closer together than the loosest limit of the sweep: the budget joins them as far as
+	// it asks and no further, at every step
+	mesh = ( PartMesh ){ 0 };
+	for ( int i = 0; i < 10; ++i )
+	{
+		float x = 0.15f * (float)i;
+		AddBox( &mesh, ( b3Vec3 ){ x, 0.0f, 0.0f }, ( b3Vec3 ){ x + 0.1f, 1.0f, 0.1f } );
+	}
+
+	def = MakePartDef( &mesh );
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 10 );
+	b3DestroyConvexMergeResult( result );
+
+	def.maxHullCount = 8;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 8 );
+	for ( int i = 0; i < result->stepCount; ++i )
+	{
+		ENSURE( result->steps[i].hullCount == 8 );
+	}
+
+	b3DestroyConvexMergeResult( result );
 	return 0;
 }
 

@@ -98,6 +98,10 @@ typedef struct b3MergeLink
 
 	// Estimate of the volume the merged hull adds over its two parts
 	float growth;
+
+	// A link made only to meet a hull budget, between parts of the mesh that do not touch. It
+	// is merged across only while the budget is still to be met.
+	bool bridge;
 } b3MergeLink;
 
 // A node of the merge graph: one convex piece and the pieces it touches
@@ -161,6 +165,9 @@ typedef struct b3MergeCandidate
 	// An exact candidate was priced with its merged hull. Otherwise the cost is a lower bound
 	// carried over from the parts of the pair, and the pair is priced when it reaches the top.
 	bool exact;
+
+	// The pair is linked only to meet a hull budget. See b3MergeLink.
+	bool bridge;
 } b3MergeCandidate;
 
 typedef struct b3MergeContext
@@ -671,14 +678,16 @@ static b3MergeLink* b3FindLink( b3MergeNode* node, int other )
 	return NULL;
 }
 
-// Link a node to another, or raise what is known about an existing link
-static void b3SetLink( b3MergeNode* node, int other, float concavity, float growth )
+// Link a node to another, or raise what is known about an existing link. A pair linked any other
+// way is no bridge.
+static void b3SetLink( b3MergeNode* node, int other, float concavity, float growth, bool bridge )
 {
 	b3MergeLink* link = b3FindLink( node, other );
 	if ( link != NULL )
 	{
 		link->concavity = b3MaxFloat( link->concavity, concavity );
 		link->growth = b3MaxFloat( link->growth, growth );
+		link->bridge = link->bridge && bridge;
 		return;
 	}
 
@@ -691,7 +700,7 @@ static void b3SetLink( b3MergeNode* node, int other, float concavity, float grow
 		node->linkCapacity = capacity;
 	}
 
-	node->links[node->linkCount++] = ( b3MergeLink ){ other, concavity, growth };
+	node->links[node->linkCount++] = ( b3MergeLink ){ other, concavity, growth, bridge };
 }
 
 static void b3RemoveLink( b3MergeNode* node, int other )
@@ -1108,7 +1117,7 @@ static float b3GetMergeLimit( const b3MergeContext* ctx, const b3MergeNode* node
 
 // Queue a pair on what is known about it so far. Pricing waits until the pair is the cheapest.
 static void b3QueueEstimate( b3MergeContext* ctx, int indexA, int indexB, float concavity,
-							 float growth )
+							 float growth, bool bridge )
 {
 	const b3MergeNode* nodeA = ctx->nodes + indexA;
 	const b3MergeNode* nodeB = ctx->nodes + indexB;
@@ -1124,9 +1133,10 @@ static void b3QueueEstimate( b3MergeContext* ctx, int indexA, int indexB, float 
 	candidate.versionA = nodeA->version;
 	candidate.versionB = nodeB->version;
 	candidate.exact = false;
+	candidate.bridge = bridge;
 
-	// Without a hull budget a merge over the limit can never happen
-	if ( candidate.cost > ctx->maxConcavity && ctx->hasBudget == false )
+	// Without a hull budget a merge over the limit, or across a bridge, can never happen
+	if ( ( candidate.cost > ctx->maxConcavity || bridge ) && ctx->hasBudget == false )
 	{
 		return;
 	}
@@ -1165,8 +1175,8 @@ static void b3PriceCandidate( b3MergeContext* ctx, b3MergeCandidate candidate )
 	// What a flat shape closes over is no bound on what the pair grows into: more triangles of
 	// the same face can fill it in.
 	float bound = flat ? 0.0f : candidate.concavity;
-	b3SetLink( nodeA, candidate.nodeB, bound, candidate.growth );
-	b3SetLink( nodeB, candidate.nodeA, bound, candidate.growth );
+	b3SetLink( nodeA, candidate.nodeB, bound, candidate.growth, candidate.bridge );
+	b3SetLink( nodeB, candidate.nodeA, bound, candidate.growth, candidate.bridge );
 
 	if ( candidate.cost > ctx->maxConcavity && ctx->hasBudget == false )
 	{
@@ -1218,7 +1228,7 @@ static void b3MergeNodes( b3MergeContext* ctx, const b3MergeCandidate* candidate
 		}
 
 		b3RemoveLink( ctx->nodes + link.node, candidate->nodeB );
-		b3SetLink( nodeA, link.node, link.concavity, link.growth );
+		b3SetLink( nodeA, link.node, link.concavity, link.growth, link.bridge );
 	}
 
 	nodeB->linkCount = 0;
@@ -1227,8 +1237,10 @@ static void b3MergeNodes( b3MergeContext* ctx, const b3MergeCandidate* candidate
 	{
 		b3MergeLink* link = nodeA->links + i;
 		link->concavity = b3MaxFloat( link->concavity, bound );
-		b3SetLink( ctx->nodes + link->node, candidate->nodeA, link->concavity, link->growth );
-		b3QueueEstimate( ctx, candidate->nodeA, link->node, link->concavity, link->growth );
+		b3SetLink( ctx->nodes + link->node, candidate->nodeA, link->concavity, link->growth,
+				   link->bridge );
+		b3QueueEstimate( ctx, candidate->nodeA, link->node, link->concavity, link->growth,
+						 link->bridge );
 	}
 }
 
@@ -1338,8 +1350,8 @@ static void b3KillNode( b3MergeContext* ctx, int index )
 static void b3LinkNodes( b3MergeContext* ctx, int i, int j )
 {
 	float concavity = b3MaxFloat( ctx->nodes[i].concavity, ctx->nodes[j].concavity );
-	b3SetLink( ctx->nodes + i, j, concavity, 0.0f );
-	b3SetLink( ctx->nodes + j, i, concavity, 0.0f );
+	b3SetLink( ctx->nodes + i, j, concavity, 0.0f, false );
+	b3SetLink( ctx->nodes + j, i, concavity, 0.0f, false );
 }
 
 // A neighbor search: the node asking, the context its links go into, and whether only higher
@@ -1761,6 +1773,12 @@ static void b3DrainQueue( b3MergeContext* ctx )
 			break;
 		}
 
+		// A bridge is only for a budget still to be met
+		if ( candidate.bridge && overBudget == false )
+		{
+			continue;
+		}
+
 		if ( candidate.exact == false )
 		{
 			b3PriceCandidate( ctx, candidate );
@@ -1792,7 +1810,7 @@ static void b3QueueLinks( b3MergeContext* ctx, const bool* nodes )
 				continue;
 			}
 
-			b3QueueEstimate( ctx, i, link.node, link.concavity, link.growth );
+			b3QueueEstimate( ctx, i, link.node, link.concavity, link.growth, link.bridge );
 		}
 	}
 }
@@ -1850,8 +1868,8 @@ static float b3BoxDistanceSquared( b3AABB a, b3AABB b )
 }
 
 // A hull budget holds across gaps too. Once no linked pair is left while the budget is not met,
-// each hull is linked to the hulls nearest to it, so parts of the mesh that do not touch can
-// merge. Returns whether any link was added.
+// each hull is linked to the hulls nearest to it by a bridge, so parts of the mesh that do not
+// touch can merge, as far as the budget asks and no further. Returns whether any link was added.
 static bool b3LinkNearest( b3MergeContext* ctx )
 {
 	int* alive = b3Alloc( (size_t)b3MaxInt( ctx->aliveCount, 1 ) * sizeof( int ) );
@@ -1905,9 +1923,10 @@ static bool b3LinkNearest( b3MergeContext* ctx )
 			int j = nearest[k];
 			if ( b3FindLink( ctx->nodes + i, j ) == NULL )
 			{
-				b3LinkNodes( ctx, i, j );
-				b3MergeLink* link = b3FindLink( ctx->nodes + i, j );
-				b3QueueEstimate( ctx, i, j, link->concavity, link->growth );
+				float concavity = b3MaxFloat( ctx->nodes[i].concavity, ctx->nodes[j].concavity );
+				b3SetLink( ctx->nodes + i, j, concavity, 0.0f, true );
+				b3SetLink( ctx->nodes + j, i, concavity, 0.0f, true );
+				b3QueueEstimate( ctx, i, j, concavity, 0.0f, true );
 				added = true;
 			}
 		}
