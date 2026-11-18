@@ -25,6 +25,7 @@ set(BOX3D_SOURCE_FILES
 	contact.c
 	contact.h
 	container.h
+	convex_merge.c
 	convex_manifold_wide.inl
 	convex_manifold.c
 	core.c

@@ -124,6 +124,138 @@ Hulls created with `b3CreateCylinder`, `b3CreateCone`, and `b3CreateHull` are
 heap-allocated and must be freed with `b3DestroyHull`. `b3BoxHull` values are
 stack/struct-allocated and must not be freed.
 
+#### Merging Convex Pieces
+
+A concave object collides as a set of convex hulls. `b3MergeConvexPieces` makes those hulls
+from a triangle mesh. It starts from small convex pieces and merges neighbors while the
+merged hull stays close to the mesh, so a hull does not close over a doorway or a window.
+By default the pieces are the triangles of the mesh itself, and the mesh is all it needs:
+
+```c
+b3ConvexMergeDef def = b3DefaultConvexMergeDef();
+def.meshVertices = meshVertices;
+def.meshIndices = meshIndices;
+def.meshVertexCount = meshVertexCount;
+def.meshTriangleCount = meshTriangleCount;
+
+b3ConvexMergeResult* result = b3MergeConvexPieces(&def);
+if (result == NULL)
+{
+    // invalid definition: a missing array, a triangle index past the vertices,
+    // a coordinate that is not finite, or a mesh with no extent
+    return;
+}
+for (int i = 0; i < result->pieceCount; ++i)
+{
+    const b3Vec3* points = result->points + result->offsets[i];
+    int count = result->offsets[i + 1] - result->offsets[i];
+    b3HullData* hull = b3CreateHull(points, count, count);
+    // ...
+}
+b3DestroyConvexMergeResult(result);
+```
+
+The cost of a merge is measured on the source surface. Sample points are spread over the
+triangles and a ray is cast outward from each. A ray that starts inside the merged hull
+runs through open space until it leaves the hull or reenters the mesh, and that run is the
+depth the hull seals there. The run is capped at twice the farthest the ray gets from the
+surface, so a doorway reads as its width while a sliver of hull lying against a wall reads
+as its thickness. Neighboring pieces merge cheapest first, the way HACD collapses the
+edges of its dual graph.
+
+Starting from the triangles (`seedTriangles`, the default) is HACD as Roblox describes it
+in "A Search for Better Convex Decomposition". Every triangle is a flat piece, and
+triangles that share an edge are neighbors, with vertices welded by position so a seam of
+split vertices still joins. A triangle with an edge no other triangle shares, at a crack or
+a T-junction, is also a neighbor of every triangle its bounding box touches. Flat pieces in
+one plane merge as polygons, priced by the area they add to their triangles, until a merge
+takes them out of the plane. Nothing is voxelized, so every piece starts on the surface
+instead of a voxel past it, and a mesh made of flat faces comes apart exactly. A piece
+still flat once the merge at a limit has run its course is pushed into the solid to make
+it a hull, and then gets to merge again as a hull.
+
+The mesh may be made of several closed parts, also parts that touch or pass into each
+other: a face pressed against another part, or buried in it, does not count as open space.
+Every tolerance follows the size of the mesh, so it works in any units, and either winding
+gives the same hulls. Three things to know:
+
+- The hulls follow the surface, so the inside of a thick solid can stay uncovered. A
+  thick curved wall is where that shows.
+- The hulls can overlap. A body that takes its mass from them is heavier than the solid,
+  so set the mass of a dynamic body yourself if it matters.
+- The time grows with the triangle count. A few thousand triangles take a fraction of a
+  second, a hundred thousand take seconds.
+
+How many hulls a mesh needs depends on the limit on the sealed depth, and the right limit
+is rarely known up front. By default the merge finds it with a sweep (`enableSweep`): the
+pieces are merged at a series of loosening limits, and the step with the best trade
+between few hulls and little sealed is returned. Each limit carries on from the hulls the
+one before left. The samples and the neighbor graph are built once, so the whole series
+costs little more than a single merge at the loosest limit, and the hull count never rises
+along it.
+
+```c
+def.minConcavity = 0.0f;  // tightest limit, 0 for 0.5% of the diagonal of the mesh bounds
+def.maxConcavity = 0.0f;  // loosest limit, 0 for 8% of the diagonal
+def.sweepSteps = 9;       // limits, spread geometrically between the two
+def.hullWeight = 1.0f;    // above 1 leans toward fewer hulls, below 1 toward a closer fit
+```
+
+The result says what the sweep saw. `result->steps` has the limit, the hull count and the
+sealed depth of each step, and `result->bestStep` is the one the hulls are from:
+
+```c
+for (int i = 0; i < result->stepCount; ++i)
+{
+    const b3ConvexMergeStep* step = result->steps + i;
+    // step->hullCount hulls seal step->sealedDepth at a limit of step->maxConcavity
+}
+```
+
+The chosen step is a heuristic. Hull count and sealed depth are each scaled by their
+largest value over the steps, and the step nearest to no hulls and nothing sealed wins. It
+moves with the range swept, and where two steps score about the same, a small change to the
+mesh can tip it from one to the other. It is not the fewest hulls possible either: the
+merge is greedy and can only join the pieces it started from.
+
+To choose by a rule of your own, sweep once, read the steps, and sweep again with
+`sweepStep` set to the step you want. Its hulls come back:
+
+```c
+def.sweepStep = 3; // the fourth limit of the sweep; -1, the default, lets the sweep choose
+```
+
+To merge to a limit of your own, turn the sweep off. `maxConcavity` is then the limit:
+
+```c
+def.enableSweep = false;
+def.maxConcavity = 0.05f * b3GetLengthUnitsPerMeter(); // a hull may seal 5 cm of open space
+def.maxHullCount = 32;                                 // optional budget, 0 for none
+```
+
+With `maxHullCount` set, merging continues past the limit until the budget is met, at
+every step of a sweep, also across gaps between parts that do not touch, and
+`result->maxConcavity` reports what that cost. A budget that is never reached changes
+nothing. A merged hull keeps at most 44 vertices (`maxHullVertices` is clamped to that):
+`b3CreateHull` holds a hull to `B3_MAX_HULL_EDGES` edges, which a hull of more vertices can
+pass. The source mesh should be closed. Either winding works.
+
+To merge pieces of your own instead, turn `seedTriangles` off and hand them over. This is
+for the pieces of a volumetric decomposition such as V-HACD, which fills the inside of the
+solid and takes about the same time whatever the triangle count. Such a decomposition
+merges its pieces by volume, where an opening is cheap, so give it a generous hull budget
+to get its pieces unmerged and let this merge decide how many hulls remain:
+
+```c
+def.seedTriangles = false;
+def.piecePoints = piecePoints;        // all pieces back to back
+def.pieceOffsets = pieceOffsets;      // pieceCount + 1 offsets into piecePoints
+def.pieceCount = pieceCount;
+```
+
+A voxel piece reaches past the surface by about a voxel, and a merge can only be as tight
+as its pieces: what a piece seals as it comes, the merged hulls seal too.
+
 ### Triangle Meshes
 
 Triangle meshes let you describe concave or open surfaces using a triangle soup.

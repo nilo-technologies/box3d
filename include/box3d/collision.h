@@ -248,6 +248,26 @@ B3_API b3HullData* b3CloneAndTransformHull( const b3HullData* original, b3Transf
 /// Destroy a hull.
 B3_API void b3DestroyHull( b3HullData* hull );
 
+/// Use this to initialize your convex merge definition.
+B3_API b3ConvexMergeDef b3DefaultConvexMergeDef( void );
+
+/// Decompose a mesh into convex hulls that stay close to it, by merging convex pieces.
+/// Neighboring pieces merge cheapest first, where the cost of a merge is the depth of open space
+/// the merged hull would seal. That depth is measured with rays cast outward from sample points on
+/// the source triangles, so a merged hull does not close over a doorway or a window.
+/// By default the pieces are the triangles of the mesh itself, as in HACD, and the definition
+/// needs no pieces. With b3ConvexMergeDef::seedTriangles off the pieces of the definition are
+/// merged instead: a volumetric decomposition such as V-HACD merges by volume and can close an
+/// opening to meet its hull budget, so feed it a generous budget and merge its pieces here.
+/// By default the limit on the sealed depth is found by a sweep: the pieces are merged at a
+/// series of loosening limits in one pass and the step with the best trade between few hulls and
+/// little sealed is returned. See b3ConvexMergeDef::enableSweep.
+/// Returns NULL if the definition is invalid.
+B3_API b3ConvexMergeResult* b3MergeConvexPieces( const b3ConvexMergeDef* def );
+
+/// Destroy a convex merge result.
+B3_API void b3DestroyConvexMergeResult( b3ConvexMergeResult* result );
+
 /// Make a cube as a hull. Do not call b3DestroyHull on this.
 B3_API b3BoxHull b3MakeCubeHull( float halfWidth );
 
