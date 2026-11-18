@@ -1003,8 +1003,8 @@ static bool HasHullInsideAnother( const b3ConvexMergeResult* result )
 	return false;
 }
 
-// A mesh with a coordinate that is not finite is turned away, wherever the vertex is. A vertex no
-// triangle uses is left out, however far it is.
+// A mesh is turned away when a vertex a triangle uses is not finite, or when it is more than
+// 1e8 across. A vertex no triangle uses is left out, finite or not, however far it is.
 static int MergeRejectsNonFiniteInput( void )
 {
 	WallMesh wall;
@@ -1028,7 +1028,7 @@ static int MergeRejectsNonFiniteInput( void )
 		wall.vertices[i] = saved;
 	}
 
-	// A mesh too large to measure in float
+	// A mesh past the size cap of 1e8 across
 	b3Vec3 huge[WALL_VERTEX_COUNT];
 	for ( int i = 0; i < WALL_VERTEX_COUNT; ++i )
 	{
