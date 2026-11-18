@@ -2308,15 +2308,19 @@ typedef struct b3BoxHull
 	float edgeCosines[12];		 ///< dot(n1, n2) for each full edge.
 } b3BoxHull;
 
-/// Input for b3MergeConvexPieces. No pointers are held after the call, so all this data can be temporary.
-/// By default the merge starts from the triangles of the mesh and needs no pieces. See seedTriangles.
+/// Input for b3MergeConvexPieces. No pointers are held after the call, so all this data can be
+/// temporary. By default the merge starts from the triangles of the mesh and needs no pieces. See
+/// seedTriangles.
 typedef struct b3ConvexMergeDef
 {
 	/// Vertices of the source triangle mesh the pieces were cut from.
 	const b3Vec3* meshVertices;
 
-	/// Triangle vertex indices of the source mesh, 3 for each triangle. The mesh should be closed and
-	/// wound one way. Either winding works, the outward side is found from the signed volume.
+	/// Triangle vertex indices of the source mesh, 3 for each triangle. The mesh should be closed
+	/// and wound one way. Either winding works, the outward side is found from the signed volume,
+	/// and both give the same hulls. It may be made of several closed parts, also parts that touch
+	/// or pass into each other. Vertices no triangle uses are ignored. Every vertex a triangle uses
+	/// must be finite, or the merge returns NULL.
 	const int32_t* meshIndices;
 
 	/// Points of the convex pieces, all pieces back to back. Not used with seedTriangles.
@@ -2352,11 +2356,14 @@ typedef struct b3ConvexMergeDef
 	float hullWeight;
 
 	/// Hull budget. Use 0 for no budget: merging then stops at the limit alone. With a budget
-	/// merging continues past the limit, cheapest merge first, until this many hulls remain. A
-	/// sweep meets the budget at every step.
+	/// merging continues past the limit, cheapest merge first, until this many hulls remain, also
+	/// across gaps between parts of the mesh that do not touch. A sweep meets the budget at every
+	/// step. A budget that is never reached changes nothing.
 	int maxHullCount;
 
-	/// Vertex limit for each merged hull. Clamped to [4, B3_MAX_HULL_VERTICES].
+	/// Vertex limit for each merged hull. Clamped to [4, 44]: b3CreateHull holds a hull to
+	/// B3_MAX_HULL_EDGES edges, which a hull of more vertices can pass. A piece of more vertices is
+	/// simplified to this many.
 	int maxHullVertices;
 
 	/// Number of sample points spread over the source surface. More samples see thinner openings
@@ -2367,14 +2374,22 @@ typedef struct b3ConvexMergeDef
 	/// maxConcavity. Clamped to [1, 64]. Not used without enableSweep.
 	int sweepSteps;
 
+	/// The step of the sweep to return, from 0 for the tightest, in place of the one the sweep
+	/// chooses. Use -1, the default, to let the sweep choose. Clamped to the last step. This is
+	/// how to get the hulls of a step chosen by a rule of your own: sweep once, read the steps,
+	/// then sweep again with this set. Not used without enableSweep.
+	int sweepStep;
+
 	/// Start from the triangles of the mesh instead of from pieces, as HACD does: every triangle
-	/// is a flat piece, and triangles whose bounding boxes touch are neighbors. That takes in the
-	/// triangles that share an edge or a corner, and now and then a pair that only comes close.
-	/// Nothing is voxelized, so every piece starts on the surface. The hulls follow the surface,
-	/// though, so the inside of a thick solid can stay uncovered, and the time grows with the
-	/// triangle count. This is the default. With it the pieces of the definition are not used and
-	/// may be left out. Turn it off to merge pieces of your own,
-	/// such as those of a voxel decomposition.
+	/// is a flat piece, and triangles that share an edge are neighbors, with vertices welded by
+	/// position. A triangle with an edge no other triangle shares is also a neighbor of every
+	/// triangle its bounding box touches. Nothing is voxelized, so every piece starts on the
+	/// surface. Flat pieces left at the end of a merge are pushed into the solid to make hulls,
+	/// which then get to merge again. The hulls follow the surface, though, so the inside of a
+	/// thick solid can stay uncovered, the hulls can overlap, and the time grows with the
+	/// triangle count. This is the default. With it the pieces of the definition are not used
+	/// and may be left out. Turn it off to merge pieces of your own, such as those of a voxel
+	/// decomposition.
 	bool seedTriangles;
 
 	/// Find the limit instead of taking it. How many hulls a mesh needs depends on the limit, and
@@ -2426,9 +2441,9 @@ typedef struct b3ConvexMergeResult
 	/// The number of steps.
 	int stepCount;
 
-	/// The step these hulls are from. A sweep chooses it: hull count and sealed depth are each
-	/// scaled by their largest value over the steps, and the step nearest to no hulls and nothing
-	/// sealed wins.
+	/// The step these hulls are from: sweepStep if it was given, or the one the sweep chose. A
+	/// sweep scales the hull count of each step by that of the first, the tightest, and its sealed
+	/// depth by the loosest limit, and the step nearest to no hulls and nothing sealed wins.
 	int bestStep;
 
 	/// The total number of bytes for this result.

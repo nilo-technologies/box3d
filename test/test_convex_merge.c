@@ -869,6 +869,429 @@ static int DefaultNeedsOnlyTheMesh( void )
 	return 0;
 }
 
+// A mesh built up from closed parts, at most a few thousand triangles
+#define PART_VERTEX_CAPACITY 4096
+#define PART_TRIANGLE_CAPACITY 4096
+
+typedef struct PartMesh
+{
+	b3Vec3 vertices[PART_VERTEX_CAPACITY];
+	int32_t indices[3 * PART_TRIANGLE_CAPACITY];
+	int vertexCount;
+	int triangleCount;
+} PartMesh;
+
+static void AddTriangle( PartMesh* mesh, int a, int b, int c )
+{
+	int32_t* triangle = mesh->indices + 3 * mesh->triangleCount++;
+	triangle[0] = a;
+	triangle[1] = b;
+	triangle[2] = c;
+}
+
+// A closed box, wound counter-clockwise seen from outside
+static void AddBox( PartMesh* mesh, b3Vec3 lower, b3Vec3 upper )
+{
+	int base = mesh->vertexCount;
+	for ( int j = 0; j < 8; ++j )
+	{
+		mesh->vertices[mesh->vertexCount++] =
+			( b3Vec3 ){ ( j & 1 ) ? upper.x : lower.x, ( j & 2 ) ? upper.y : lower.y,
+						( j & 4 ) ? upper.z : lower.z };
+	}
+
+	static const int faces[6][4] = {
+		{ 0, 4, 6, 2 }, { 1, 3, 7, 5 }, { 0, 1, 5, 4 },
+		{ 2, 6, 7, 3 }, { 0, 2, 3, 1 }, { 4, 5, 7, 6 },
+	};
+
+	for ( int f = 0; f < 6; ++f )
+	{
+		AddTriangle( mesh, base + faces[f][0], base + faces[f][1], base + faces[f][2] );
+		AddTriangle( mesh, base + faces[f][0], base + faces[f][2], base + faces[f][3] );
+	}
+}
+
+// A closed profile in (radius, height) turned about the y axis
+static void AddLathe( PartMesh* mesh, const float ( *profile )[2], int profileCount, int segments,
+					  float angle )
+{
+	int base = mesh->vertexCount;
+	for ( int s = 0; s < segments; ++s )
+	{
+		float a = angle + 2.0f * B3_PI * (float)s / (float)segments;
+		for ( int p = 0; p < profileCount; ++p )
+		{
+			mesh->vertices[mesh->vertexCount++] =
+				( b3Vec3 ){ profile[p][0] * cosf( a ), profile[p][1], profile[p][0] * sinf( a ) };
+		}
+	}
+
+	for ( int s = 0; s < segments; ++s )
+	{
+		int s1 = ( s + 1 ) % segments;
+		for ( int p = 0; p < profileCount; ++p )
+		{
+			int p1 = ( p + 1 ) % profileCount;
+			int a = base + s * profileCount + p, b = base + s * profileCount + p1;
+			int c = base + s1 * profileCount + p1, d = base + s1 * profileCount + p;
+			AddTriangle( mesh, a, b, c );
+			AddTriangle( mesh, a, c, d );
+		}
+	}
+}
+
+static void MakeTorus( PartMesh* mesh )
+{
+	float profile[12][2];
+	for ( int i = 0; i < 12; ++i )
+	{
+		float a = 2.0f * B3_PI * (float)i / 12.0f;
+		profile[i][0] = 1.0f + 0.35f * cosf( a );
+		profile[i][1] = 0.35f * sinf( a );
+	}
+
+	*mesh = ( PartMesh ){ 0 };
+	AddLathe( mesh, (const float( * )[2])profile, 12, 24, 0.0f );
+}
+
+static b3ConvexMergeDef MakePartDef( const PartMesh* mesh )
+{
+	b3ConvexMergeDef def = b3DefaultConvexMergeDef();
+	def.meshVertices = mesh->vertices;
+	def.meshIndices = mesh->indices;
+	def.meshVertexCount = mesh->vertexCount;
+	def.meshTriangleCount = mesh->triangleCount;
+	return def;
+}
+
+// Is every point of one hull of the result inside another?
+static bool HasHullInsideAnother( const b3ConvexMergeResult* result )
+{
+	for ( int i = 0; i < result->pieceCount; ++i )
+	{
+		int count = result->offsets[i + 1] - result->offsets[i];
+		b3HullData* hull = b3CreateHull( result->points + result->offsets[i], count, count );
+		if ( hull == NULL )
+		{
+			continue;
+		}
+
+		const b3Plane* planes = b3GetHullPlanes( hull );
+		for ( int j = 0; j < result->pieceCount; ++j )
+		{
+			bool inside = j != i;
+			for ( int k = result->offsets[j]; k < result->offsets[j + 1] && inside; ++k )
+			{
+				for ( int f = 0; f < hull->faceCount && inside; ++f )
+				{
+					inside =
+						b3Dot( planes[f].normal, result->points[k] ) - planes[f].offset <= 1.0e-4f;
+				}
+			}
+
+			if ( inside )
+			{
+				b3DestroyHull( hull );
+				return true;
+			}
+		}
+
+		b3DestroyHull( hull );
+	}
+
+	return false;
+}
+
+// A mesh with a coordinate that is not finite is turned away, wherever the vertex is. A vertex no
+// triangle uses is left out, however far it is.
+static int MergeRejectsNonFiniteInput( void )
+{
+	WallMesh wall;
+	MakeWall( &wall, false );
+	b3ConvexMergeDef def = b3DefaultConvexMergeDef();
+	def.meshVertices = wall.vertices;
+	def.meshIndices = wall.indices;
+	def.meshVertexCount = WALL_VERTEX_COUNT;
+	def.meshTriangleCount = WALL_TRIANGLE_COUNT;
+
+	b3ConvexMergeResult* reference = b3MergeConvexPieces( &def );
+	ENSURE( reference != NULL );
+
+	for ( int i = 0; i < WALL_VERTEX_COUNT; ++i )
+	{
+		b3Vec3 saved = wall.vertices[i];
+		wall.vertices[i].y = nanf( "" );
+		ENSURE( b3MergeConvexPieces( &def ) == NULL );
+		wall.vertices[i].y = INFINITY;
+		ENSURE( b3MergeConvexPieces( &def ) == NULL );
+		wall.vertices[i] = saved;
+	}
+
+	// A mesh too large to measure in float
+	b3Vec3 huge[WALL_VERTEX_COUNT];
+	for ( int i = 0; i < WALL_VERTEX_COUNT; ++i )
+	{
+		huge[i] = b3MulSV( 1.0e19f, wall.vertices[i] );
+	}
+
+	def.meshVertices = huge;
+	ENSURE( b3MergeConvexPieces( &def ) == NULL );
+
+	// One more vertex, unused and far away
+	b3Vec3 vertices[WALL_VERTEX_COUNT + 1];
+	for ( int i = 0; i < WALL_VERTEX_COUNT; ++i )
+	{
+		vertices[i] = wall.vertices[i];
+	}
+
+	vertices[WALL_VERTEX_COUNT] = ( b3Vec3 ){ 1.0e9f, 0.5f, 0.0f };
+	def.meshVertices = vertices;
+	def.meshVertexCount = WALL_VERTEX_COUNT + 1;
+	b3ConvexMergeResult* stray = b3MergeConvexPieces( &def );
+	ENSURE( stray != NULL );
+	ENSURE( IsSameResult( reference, stray ) );
+
+	b3DestroyConvexMergeResult( reference );
+	b3DestroyConvexMergeResult( stray );
+	return 0;
+}
+
+// Closed parts that touch or pass into each other: a face pressed against another part, or
+// buried in it, is not open space.
+static int MergeAssemblesTouchingParts( void )
+{
+	static PartMesh mesh;
+	for ( int sunk = 0; sunk < 2; ++sunk )
+	{
+		mesh = ( PartMesh ){ 0 };
+		AddBox( &mesh, ( b3Vec3 ){ -1.0f, 0.0f, -1.0f }, ( b3Vec3 ){ 1.0f, 1.0f, 1.0f } );
+		float bottom = sunk ? 0.8f : 1.0f;
+		AddBox( &mesh, ( b3Vec3 ){ -0.5f, bottom, -0.5f }, ( b3Vec3 ){ 0.5f, 2.0f, 0.5f } );
+
+		b3ConvexMergeDef def = MakePartDef( &mesh );
+		b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+		ENSURE( result != NULL );
+		ENSURE( result->pieceCount == 2 );
+		ENSURE_SMALL( result->maxConcavity, 1e-3f );
+		for ( int i = 0; i < result->stepCount; ++i )
+		{
+			ENSURE( result->steps[i].hullCount == 2 );
+		}
+
+		b3DestroyConvexMergeResult( result );
+	}
+
+	return 0;
+}
+
+// A hull budget holds across a gap between parts that do not touch
+static int BudgetCrossesGaps( void )
+{
+	static PartMesh mesh;
+	mesh = ( PartMesh ){ 0 };
+	AddBox( &mesh, ( b3Vec3 ){ -2.0f, 0.0f, -0.5f }, ( b3Vec3 ){ -1.0f, 1.0f, 0.5f } );
+	AddBox( &mesh, ( b3Vec3 ){ 1.0f, 0.0f, -0.5f }, ( b3Vec3 ){ 2.0f, 1.0f, 0.5f } );
+	AddBox( &mesh, ( b3Vec3 ){ -0.5f, 3.0f, -0.5f }, ( b3Vec3 ){ 0.5f, 4.0f, 0.5f } );
+
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 3 );
+	b3DestroyConvexMergeResult( result );
+
+	for ( int budget = 1; budget <= 2; ++budget )
+	{
+		for ( int sweep = 0; sweep < 2; ++sweep )
+		{
+			def.maxHullCount = budget;
+			def.enableSweep = sweep == 1;
+			result = b3MergeConvexPieces( &def );
+			ENSURE( result != NULL );
+			ENSURE( result->pieceCount == budget );
+			for ( int i = 0; i < result->stepCount; ++i )
+			{
+				ENSURE( result->steps[i].hullCount == budget );
+			}
+
+			b3DestroyConvexMergeResult( result );
+		}
+	}
+
+	return 0;
+}
+
+// A vertex limit past what b3CreateHull can hold under its edge cap is lowered to one it can, so
+// no merge fails for it and no piece is lost
+static int MergeHoldsHullsUnderEdgeCap( void )
+{
+	static PartMesh mesh;
+	MakeTorus( &mesh );
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	def.maxHullVertices = 44;
+	b3ConvexMergeResult* reference = b3MergeConvexPieces( &def );
+	ENSURE( reference != NULL );
+
+	def.maxHullVertices = 128;
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( IsSameResult( reference, result ) );
+	ENSURE( result->steps[result->bestStep].hullCount == result->pieceCount );
+	for ( int i = 0; i < result->pieceCount; ++i )
+	{
+		ENSURE( result->offsets[i + 1] - result->offsets[i] <= 44 );
+	}
+
+	// A piece handed in with more points than that is simplified, not dropped
+	b3Vec3 disc[2 * 64];
+	for ( int i = 0; i < 64; ++i )
+	{
+		float a = 2.0f * B3_PI * (float)i / 64.0f;
+		disc[i] = ( b3Vec3 ){ cosf( a ), 0.0f, sinf( a ) };
+		disc[64 + i] = ( b3Vec3 ){ cosf( a ), 0.5f, sinf( a ) };
+	}
+
+	int32_t offsets[2] = { 0, 128 };
+	def.seedTriangles = false;
+	def.piecePoints = disc;
+	def.pieceOffsets = offsets;
+	def.pieceCount = 1;
+	b3ConvexMergeResult* single = b3MergeConvexPieces( &def );
+	ENSURE( single != NULL );
+	ENSURE( single->pieceCount == 1 );
+	ENSURE( single->offsets[1] <= 44 );
+
+	b3DestroyConvexMergeResult( reference );
+	b3DestroyConvexMergeResult( result );
+	b3DestroyConvexMergeResult( single );
+	return 0;
+}
+
+// sweepStep returns the hulls of the step asked for, the same steps as a sweep that chooses
+static int SweepStepReturnsThatStep( void )
+{
+	static PartMesh mesh;
+	MakeTorus( &mesh );
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	b3ConvexMergeResult* chosen = b3MergeConvexPieces( &def );
+	ENSURE( chosen != NULL );
+
+	int distinct = 0;
+	for ( int k = 0; k < chosen->stepCount; ++k )
+	{
+		def.sweepStep = k;
+		b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+		ENSURE( result != NULL );
+		ENSURE( result->bestStep == k );
+		ENSURE( result->pieceCount == result->steps[k].hullCount );
+		for ( int i = 0; i < chosen->stepCount; ++i )
+		{
+			ENSURE( result->steps[i].hullCount == chosen->steps[i].hullCount );
+			ENSURE( result->steps[i].sealedDepth == chosen->steps[i].sealedDepth );
+		}
+
+		if ( k == chosen->bestStep )
+		{
+			ENSURE( IsSameResult( result, chosen ) );
+		}
+
+		distinct += k == 0 || chosen->steps[k].hullCount != chosen->steps[k - 1].hullCount ? 1 : 0;
+		b3DestroyConvexMergeResult( result );
+	}
+
+	// The torus has hulls to lose along the sweep
+	ENSURE( distinct > 1 );
+
+	// Past the last step is the last step
+	def.sweepStep = 1000;
+	b3ConvexMergeResult* last = b3MergeConvexPieces( &def );
+	ENSURE( last != NULL );
+	ENSURE( last->bestStep == chosen->stepCount - 1 );
+	b3DestroyConvexMergeResult( last );
+	b3DestroyConvexMergeResult( chosen );
+	return 0;
+}
+
+// Reversing the winding of a curved mesh gives the same hulls, and so does a hull budget the merge
+// never reaches
+static int SameHullsWhateverWindingAndUnusedBudget( void )
+{
+	static PartMesh mesh, flipped;
+	MakeTorus( &mesh );
+	flipped = mesh;
+	for ( int i = 0; i < flipped.triangleCount; ++i )
+	{
+		int32_t t = flipped.indices[3 * i + 1];
+		flipped.indices[3 * i + 1] = flipped.indices[3 * i + 2];
+		flipped.indices[3 * i + 2] = t;
+	}
+
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	b3ConvexMergeResult* reference = b3MergeConvexPieces( &def );
+	ENSURE( reference != NULL );
+
+	b3ConvexMergeDef flippedDef = MakePartDef( &flipped );
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &flippedDef );
+	ENSURE( result != NULL );
+	ENSURE( IsSameResult( reference, result ) );
+	b3DestroyConvexMergeResult( result );
+
+	def.maxHullCount = 1000000;
+	result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( IsSameResult( reference, result ) );
+	b3DestroyConvexMergeResult( result );
+
+	b3DestroyConvexMergeResult( reference );
+	return 0;
+}
+
+// A square cup: its inner and outer floor are flat pieces with nothing flat left to join, so they
+// are made into hulls and merge as hulls. The floor comes out one slab as thick as the floor, and
+// no hull is left inside another.
+static int FlatPiecesBecomeHulls( void )
+{
+	static PartMesh mesh;
+	mesh = ( PartMesh ){ 0 };
+	float r = sqrtf( 2.0f );
+	float profile[6][2] = {
+		{ 0.0f, 0.0f },		{ r, 0.0f },		{ r, 1.0f },
+		{ 0.8f * r, 1.0f }, { 0.8f * r, 0.2f }, { 0.0f, 0.2f },
+	};
+	AddLathe( &mesh, (const float( * )[2])profile, 6, 4, 0.25f * B3_PI );
+
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 5 );
+	ENSURE_SMALL( result->maxConcavity, 1e-3f );
+	ENSURE( HasHullInsideAnother( result ) == false );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 0.1f, 0.0f } ) );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 0.5f, 0.0f } ) == false );
+
+	// The same at a thousandth of the size and a thousand times it: nothing depends on the units
+	for ( int k = 0; k < 2; ++k )
+	{
+		static PartMesh scaled;
+		scaled = mesh;
+		float scale = k == 0 ? 1.0e-3f : 1.0e3f;
+		for ( int i = 0; i < scaled.vertexCount; ++i )
+		{
+			scaled.vertices[i] = b3MulSV( scale, mesh.vertices[i] );
+		}
+
+		b3ConvexMergeDef scaledDef = MakePartDef( &scaled );
+		b3ConvexMergeResult* other = b3MergeConvexPieces( &scaledDef );
+		ENSURE( other != NULL );
+		ENSURE( other->pieceCount == result->pieceCount );
+		ENSURE( IsCovered( other, b3MulSV( scale, ( b3Vec3 ){ 0.0f, 0.1f, 0.0f } ) ) );
+		b3DestroyConvexMergeResult( other );
+	}
+
+	b3DestroyConvexMergeResult( result );
+	return 0;
+}
+
 int ConvexMergeTest( void )
 {
 	RUN_SUBTEST( MergeKeepsDoorwayOpen );
@@ -888,6 +1311,13 @@ int ConvexMergeTest( void )
 	RUN_SUBTEST( SweepIsRepeatable );
 	RUN_SUBTEST( SeedTrianglesKeepsDoorwayOpen );
 	RUN_SUBTEST( DefaultNeedsOnlyTheMesh );
+	RUN_SUBTEST( MergeRejectsNonFiniteInput );
+	RUN_SUBTEST( MergeAssemblesTouchingParts );
+	RUN_SUBTEST( BudgetCrossesGaps );
+	RUN_SUBTEST( MergeHoldsHullsUnderEdgeCap );
+	RUN_SUBTEST( SweepStepReturnsThatStep );
+	RUN_SUBTEST( SameHullsWhateverWindingAndUnusedBudget );
+	RUN_SUBTEST( FlatPiecesBecomeHulls );
 
 	return 0;
 }

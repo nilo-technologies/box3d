@@ -142,7 +142,7 @@ b3ConvexMergeResult* result = b3MergeConvexPieces(&def);
 if (result == NULL)
 {
     // invalid definition: a missing array, a triangle index past the vertices,
-    // or a mesh with no extent
+    // a coordinate that is not finite, or a mesh with no extent
     return;
 }
 for (int i = 0; i < result->pieceCount; ++i)
@@ -165,14 +165,24 @@ edges of its dual graph.
 
 Starting from the triangles (`seedTriangles`, the default) is HACD as Roblox describes it
 in "A Search for Better Convex Decomposition". Every triangle is a flat piece, and
-triangles whose bounding boxes touch are neighbors. Flat pieces in one plane merge as
-polygons, priced by the area they add to their triangles, until a merge takes them out of
-the plane. Nothing is voxelized, so every piece starts on the surface instead of a voxel
-past it, and a mesh made of flat faces comes apart exactly. A piece still flat at the end
-is pushed into the solid to make it a hull. Two things to know:
+triangles that share an edge are neighbors, with vertices welded by position so a seam of
+split vertices still joins. A triangle with an edge no other triangle shares, at a crack or
+a T-junction, is also a neighbor of every triangle its bounding box touches. Flat pieces in
+one plane merge as polygons, priced by the area they add to their triangles, until a merge
+takes them out of the plane. Nothing is voxelized, so every piece starts on the surface
+instead of a voxel past it, and a mesh made of flat faces comes apart exactly. A piece
+still flat once the merge at a limit has run its course is pushed into the solid to make
+it a hull, and then gets to merge again as a hull.
+
+The mesh may be made of several closed parts, also parts that touch or pass into each
+other: a face pressed against another part, or buried in it, does not count as open space.
+Every tolerance follows the size of the mesh, so it works in any units, and either winding
+gives the same hulls. Three things to know:
 
 - The hulls follow the surface, so the inside of a thick solid can stay uncovered. A
   thick curved wall is where that shows.
+- The hulls can overlap. A body that takes its mass from them is heavier than the solid,
+  so set the mass of a dynamic body yourself if it matters.
 - The time grows with the triangle count. A few thousand triangles take a fraction of a
   second, a hundred thousand take seconds.
 
@@ -202,10 +212,19 @@ for (int i = 0; i < result->stepCount; ++i)
 }
 ```
 
-The chosen step is a heuristic. Hull count and sealed depth are each scaled by their
-largest value over the steps, and the step nearest to no hulls and nothing sealed wins. It
-moves with the range swept, and it is not the fewest hulls possible: the merge is greedy
-and can only join the pieces it started from.
+The chosen step is a heuristic. The hull count of each step is scaled by that of the first,
+the tightest, and its sealed depth by the loosest limit, and the step nearest to no hulls
+and nothing sealed wins. Each step is scored on its own, so a change at a step that is not
+chosen does not move the choice, but the choice moves with the range swept, and it is not
+the fewest hulls possible: the merge is greedy and can only join the pieces it started
+from.
+
+To choose by a rule of your own, sweep once, read the steps, and sweep again with
+`sweepStep` set to the step you want. Its hulls come back:
+
+```c
+def.sweepStep = 3; // the fourth limit of the sweep; -1, the default, lets the sweep choose
+```
 
 To merge to a limit of your own, turn the sweep off. `maxConcavity` is then the limit:
 
@@ -216,8 +235,11 @@ def.maxHullCount = 32;                                 // optional budget, 0 for
 ```
 
 With `maxHullCount` set, merging continues past the limit until the budget is met, at
-every step of a sweep, and `result->maxConcavity` reports what that cost. The source mesh
-should be closed. Either winding works.
+every step of a sweep, also across gaps between parts that do not touch, and
+`result->maxConcavity` reports what that cost. A budget that is never reached changes
+nothing. A merged hull keeps at most 44 vertices (`maxHullVertices` is clamped to that):
+`b3CreateHull` holds a hull to `B3_MAX_HULL_EDGES` edges, which a hull of more vertices can
+pass. The source mesh should be closed. Either winding works.
 
 To merge pieces of your own instead, turn `seedTriangles` off and hand them over. This is
 for the pieces of a volumetric decomposition such as V-HACD, which fills the inside of the

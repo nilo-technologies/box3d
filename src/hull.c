@@ -154,6 +154,10 @@ typedef struct b3HullBuilder
 	int finalVertexCount;
 	int finalHalfEdgeCount;
 	int finalFaceCount;
+
+	// Set when the topology degenerates on nearly coplanar input: two faces that share their whole
+	// boundary, or a face whose area vanishes. The build gives up instead of looping.
+	bool failed;
 } b3HullBuilder;
 
 static inline void b3QHList_Init( b3QHListNode* head )
@@ -526,7 +530,7 @@ static void b3LinkFaces( b3QHFace* face1, int index1, b3QHFace* face2, int index
 	edge2->twin = edge1;
 }
 
-static void b3NewellPlane( b3QHFace* face )
+static bool b3NewellPlane( b3QHFace* face )
 {
 	int count = 0;
 	b3Vec3 centroid = b3Vec3_zero;
@@ -561,12 +565,17 @@ static void b3NewellPlane( b3QHFace* face )
 	centroid = b3Add( centroid, origin );
 
 	float length = b3Length( normal );
-	B3_VALIDATE( length > 0.0f );
+	if ( !( length > 0.0f ) )
+	{
+		return false;
+	}
+
 	normal = b3MulSV( 1.0f / length, normal );
 
 	face->centroid = centroid;
 	face->plane = b3MakePlaneFromNormalAndPoint( normal, centroid );
 	face->area = 0.5f * length;
+	return true;
 }
 
 #if B3_DEBUG
@@ -984,7 +993,12 @@ static void b3HullBuilder_ConnectEdges( b3HullBuilder* b, b3QHHalfEdge* prev, b3
 		}
 
 		// Twin->face changed shape; recompute its plane and refresh its cached max conflict.
-		b3NewellPlane( twin->face );
+		if ( b3NewellPlane( twin->face ) == false )
+		{
+			b->failed = true;
+			return;
+		}
+
 		b3HullBuilder_RecacheConflicts( twin->face, b->minOutside );
 	}
 	else
@@ -1045,25 +1059,37 @@ static void b3HullBuilder_ConnectFaces( b3HullBuilder* b, b3QHHalfEdge* edge )
 	b3QHHalfEdge* twinPrev = twin->prev;
 	b3QHHalfEdge* twinNext = twin->next;
 
+	// On nearly coplanar input the two faces can share their whole boundary, and then these walks
+	// would go around forever. Such a hull has no volume: give up on it.
 	while ( edgePrev->twin->face == twin->face )
 	{
-		B3_ASSERT( edgePrev->twin == twinNext );
-		B3_ASSERT( twinNext->twin == edgePrev );
+		if ( edgePrev->twin != twinNext || twinNext->twin != edgePrev || edgePrev->prev == edge )
+		{
+			b->failed = true;
+			return;
+		}
 
 		edgePrev = edgePrev->prev;
 		twinNext = twinNext->next;
 	}
-	B3_ASSERT( edgePrev->face != twinNext->face );
 
 	while ( edgeNext->twin->face == twin->face )
 	{
-		B3_ASSERT( edgeNext->twin == twinPrev );
-		B3_ASSERT( twinPrev->twin == edgeNext );
+		if ( edgeNext->twin != twinPrev || twinPrev->twin != edgeNext || edgeNext->next == edge )
+		{
+			b->failed = true;
+			return;
+		}
 
 		edgeNext = edgeNext->next;
 		twinPrev = twinPrev->prev;
 	}
-	B3_ASSERT( edgeNext->face != twinPrev->face );
+
+	if ( edgePrev->face == twinNext->face || edgeNext->face == twinPrev->face )
+	{
+		b->failed = true;
+		return;
+	}
 
 	face->edge = edgePrev;
 
@@ -1084,8 +1110,12 @@ static void b3HullBuilder_ConnectFaces( b3HullBuilder* b, b3QHHalfEdge* edge )
 
 	b3HullBuilder_ConnectEdges( b, edgePrev, twinNext );
 	b3HullBuilder_ConnectEdges( b, twinPrev, edgeNext );
+	if ( b->failed || b3NewellPlane( face ) == false )
+	{
+		b->failed = true;
+		return;
+	}
 
-	b3NewellPlane( face );
 	// Existing conflicts now have stale distances under the new plane; AbsorbFaces will then
 	// add more incrementally and update the cache as it goes.
 	b3HullBuilder_RecacheConflicts( face, b->minOutside );
@@ -1098,6 +1128,11 @@ static void b3HullBuilder_ConnectFaces( b3HullBuilder* b, b3QHHalfEdge* edge )
 
 static bool b3HullBuilder_MergeConcave( b3HullBuilder* b, b3QHFace* face )
 {
+	if ( b->failed )
+	{
+		return false;
+	}
+
 	b3QHHalfEdge* edge = face->edge;
 
 	do
@@ -1107,7 +1142,7 @@ static bool b3HullBuilder_MergeConcave( b3HullBuilder* b, b3QHFace* face )
 		if ( b3IsEdgeConcave( edge, b->minRadius ) || b3IsEdgeConcave( twin, b->minRadius ) )
 		{
 			b3HullBuilder_ConnectFaces( b, edge );
-			return true;
+			return b->failed == false;
 		}
 
 		edge = edge->next;
@@ -1119,6 +1154,11 @@ static bool b3HullBuilder_MergeConcave( b3HullBuilder* b, b3QHFace* face )
 
 static bool b3HullBuilder_MergeCoplanar( b3HullBuilder* b, b3QHFace* face )
 {
+	if ( b->failed )
+	{
+		return false;
+	}
+
 	b3QHHalfEdge* edge = face->edge;
 
 	do
@@ -1128,7 +1168,7 @@ static bool b3HullBuilder_MergeCoplanar( b3HullBuilder* b, b3QHFace* face )
 		if ( !b3IsEdgeConvex( edge, b->minRadius ) || !b3IsEdgeConvex( twin, b->minRadius ) )
 		{
 			b3HullBuilder_ConnectFaces( b, edge );
-			return true;
+			return b->failed == false;
 		}
 
 		edge = edge->next;
@@ -1167,6 +1207,10 @@ static void b3HullBuilder_MergeFaces( b3HullBuilder* b )
 
 			B3_ASSERT( bestEdge != NULL );
 			b3HullBuilder_ConnectFaces( b, bestEdge );
+			if ( b->failed )
+			{
+				return;
+			}
 		}
 	}
 
@@ -1293,6 +1337,11 @@ static void b3HullBuilder_AddVertexToHull( b3HullBuilder* b, b3QHVertex* vertex 
 	B3_ASSERT( b->coneCount >= 3 );
 
 	b3HullBuilder_MergeFaces( b );
+	if ( b->failed )
+	{
+		return;
+	}
+
 	b3HullBuilder_ResolveVertices( b );
 	b3HullBuilder_ResolveFaces( b );
 }
@@ -1453,6 +1502,11 @@ static bool b3HullBuilder_Construct( b3HullBuilder* b, const b3Vec3* points, int
 	while ( vertex && budget > 0 )
 	{
 		b3HullBuilder_AddVertexToHull( b, vertex );
+		if ( b->failed )
+		{
+			return false;
+		}
+
 		vertex = b3HullBuilder_NextConflictVertex( b );
 		budget -= 1;
 	}
@@ -1460,7 +1514,12 @@ static bool b3HullBuilder_Construct( b3HullBuilder* b, const b3Vec3* points, int
 	b3HullBuilder_CleanHull( b, origin );
 
 #if B3_DEBUG
-	B3_ASSERT( b3HullBuilder_IsConsistent( b ) );
+	// Input on the edge of what float arithmetic resolves can leave the topology broken. A
+	// release build turns such a hull away later, in b3IsValidHull.
+	if ( b3HullBuilder_IsConsistent( b ) == false )
+	{
+		return false;
+	}
 #endif
 
 	return b3HullBuilder_HasHull( b );
@@ -2066,9 +2125,13 @@ static bool b3UpdateHullBulkProperties( b3HullData* hull )
 		while ( edge1 != edge3 );
 	}
 
-	B3_VALIDATE( volume > 0.0f );
+	// Points too close to one plane for the float arithmetic make a hull without volume
+	if ( !( volume > 0.0f ) )
+	{
+		return false;
+	}
 
-	b3Vec3 localCenter = volume > 0.0f ? b3MulSV( 0.25f / volume, center ) : b3Vec3_zero;
+	b3Vec3 localCenter = b3MulSV( 0.25f / volume, center );
 	center = b3Add( localCenter, origin );
 
 	float radius = FLT_MAX;
@@ -2076,7 +2139,10 @@ static bool b3UpdateHullBulkProperties( b3HullData* hull )
 	{
 		b3Plane plane = planes[faceIndex];
 		float distance = b3PlaneSeparation( plane, center );
-		B3_VALIDATE( distance < 0.0f );
+		if ( !( distance < 0.0f ) )
+		{
+			return false;
+		}
 
 		radius = b3MinFloat( radius, -distance );
 	}
