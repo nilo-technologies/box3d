@@ -1261,7 +1261,8 @@ static int SameHullsWhateverWindingAndUnusedBudget( void )
 	ENSURE( IsSameResult( reference, result ) );
 	b3DestroyConvexMergeResult( result );
 
-	def.maxHullCount = 1000000;
+	// More than any step keeps, though the merge starts from more nodes than that
+	def.maxHullCount = 40;
 	result = b3MergeConvexPieces( &def );
 	ENSURE( result != NULL );
 	ENSURE( IsSameResult( reference, result ) );

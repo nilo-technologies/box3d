@@ -217,6 +217,10 @@ typedef struct b3MergeContext
 	int maxHullVertices;
 	int maxHullCount;
 	bool hasBudget;
+
+	// Whether the budget may force merges yet. It waits until the merge at the limit has run its
+	// course and the flat pieces are hulls, which often merge within the limit.
+	bool forceBudget;
 } b3MergeContext;
 
 b3ConvexMergeDef b3DefaultConvexMergeDef( void )
@@ -1072,6 +1076,13 @@ static bool b3CreateMergedShape( b3MergeContext* ctx, const b3MergeNode* nodeA,
 	return shape->hull != NULL;
 }
 
+// Was the shape's hull cut down to the vertex limit? Then it may not contain the points it was
+// made of. A hull that only reaches the limit counts too.
+static bool b3IsSimplified( const b3MergeContext* ctx, const b3MergeShape* shape )
+{
+	return shape->hull != NULL && shape->hull->vertexCount >= ctx->maxHullVertices;
+}
+
 // The deepest open space the shape two nodes would become seals
 static float b3ComputeShapeConcavity( const b3MergeContext* ctx, const b3MergeShape* shape,
 									  const b3MergeNode* nodeA, const b3MergeNode* nodeB,
@@ -1162,7 +1173,7 @@ static void b3PriceCandidate( b3MergeContext* ctx, b3MergeCandidate candidate )
 	// so a budget that is never reached changes nothing.
 	float limit = b3GetMergeLimit( ctx, nodeA, nodeB );
 	bool flat = merged.hull == NULL;
-	bool overBudget = ctx->hasBudget && ctx->aliveCount > ctx->maxHullCount;
+	bool overBudget = ctx->forceBudget && ctx->aliveCount > ctx->maxHullCount;
 	candidate.concavity =
 		b3ComputeShapeConcavity( ctx, &merged, nodeA, nodeB, overBudget ? FLT_MAX : limit );
 	candidate.cost = b3ScoreMerge( ctx, candidate.concavity, limit );
@@ -1170,11 +1181,13 @@ static void b3PriceCandidate( b3MergeContext* ctx, b3MergeCandidate candidate )
 		flat ? ctx->tolerance * ( merged.area - nodeA->solidArea - nodeB->solidArea )
 			 : merged.hull->volume - b3GetNodeVolume( nodeA ) - b3GetNodeVolume( nodeB );
 	candidate.exact = flat || overBudget || candidate.concavity <= limit;
+	bool simplified = b3IsSimplified( ctx, &merged );
 	b3DestroyShape( &merged );
 
 	// What a flat shape closes over is no bound on what the pair grows into: more triangles of
-	// the same face can fill it in.
-	float bound = flat ? 0.0f : candidate.concavity;
+	// the same face can fill it in. Nor is what a hull cut down to the vertex limit closes over:
+	// it does not contain its parts.
+	float bound = flat || simplified ? 0.0f : candidate.concavity;
 	b3SetLink( nodeA, candidate.nodeB, bound, candidate.growth, candidate.bridge );
 	b3SetLink( nodeB, candidate.nodeA, bound, candidate.growth, candidate.bridge );
 
@@ -1202,8 +1215,10 @@ static void b3MergeNodes( b3MergeContext* ctx, const b3MergeCandidate* candidate
 
 	float concavity = candidate->concavity;
 
-	// As in pricing, what a flat node closes over bounds nothing
-	float bound = merged.hull == NULL ? 0.0f : concavity;
+	// As in pricing, what a flat node or a simplified hull closes over bounds nothing, and a
+	// simplified hull no longer contains its parts, so what they knew bounds nothing either
+	bool simplified = b3IsSimplified( ctx, &merged );
+	float bound = merged.hull == NULL || simplified ? 0.0f : concavity;
 
 	b3MergeShape nothing = { 0 };
 	b3SetNodeShape( nodeA, &merged );
@@ -1236,9 +1251,14 @@ static void b3MergeNodes( b3MergeContext* ctx, const b3MergeCandidate* candidate
 	for ( int i = 0; i < nodeA->linkCount; ++i )
 	{
 		b3MergeLink* link = nodeA->links + i;
-		link->concavity = b3MaxFloat( link->concavity, bound );
+		link->concavity = simplified ? 0.0f : b3MaxFloat( link->concavity, bound );
 		b3SetLink( ctx->nodes + link->node, candidate->nodeA, link->concavity, link->growth,
 				   link->bridge );
+		if ( simplified )
+		{
+			b3FindLink( ctx->nodes + link->node, candidate->nodeA )->concavity = 0.0f;
+		}
+
 		b3QueueEstimate( ctx, candidate->nodeA, link->node, link->concavity, link->growth,
 						 link->bridge );
 	}
@@ -1767,9 +1787,11 @@ static void b3DrainQueue( b3MergeContext* ctx )
 
 		// Over the limit everything left in the queue is over the limit too, estimates included,
 		// and only a hull budget still to be met keeps the merging going.
-		bool overBudget = ctx->hasBudget && ctx->aliveCount > ctx->maxHullCount;
+		bool overBudget = ctx->forceBudget && ctx->aliveCount > ctx->maxHullCount;
 		if ( candidate.cost > ctx->maxConcavity && overBudget == false )
 		{
+			// Kept for when the budget gets to force merges
+			b3PushCandidate( ctx, candidate );
 			break;
 		}
 
@@ -1949,10 +1971,15 @@ static void b3RunMerge( b3MergeContext* ctx, float maxConcavity, int maxHullCoun
 	// limit is not built again. One within reach is priced again when it comes up, since its
 	// earlier measure stopped at the limit of the time.
 	ctx->heapCount = 0;
+	ctx->forceBudget = false;
 	b3QueueLinks( ctx, NULL );
 	b3DrainQueue( ctx );
+	bool solidified = b3SolidifyFlatNodes( ctx );
 
-	if ( b3SolidifyFlatNodes( ctx ) )
+	// Only now may a budget force merges past the limit, so one that the merge at the limit meets
+	// by itself changes nothing
+	ctx->forceBudget = ctx->hasBudget;
+	if ( solidified || ( ctx->hasBudget && ctx->aliveCount > maxHullCount ) )
 	{
 		b3DrainQueue( ctx );
 	}
