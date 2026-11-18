@@ -2442,8 +2442,8 @@ typedef struct b3ConvexMergeResult
 	int stepCount;
 
 	/// The step these hulls are from: sweepStep if it was given, or the one the sweep chose. A
-	/// sweep scales the hull count of each step by that of the first, the tightest, and its sealed
-	/// depth by the loosest limit, and the step nearest to no hulls and nothing sealed wins.
+	/// sweep scales hull count and sealed depth each by their largest value over the steps, and
+	/// the step nearest to no hulls and nothing sealed wins.
 	int bestStep;
 
 	/// The total number of bytes for this result.

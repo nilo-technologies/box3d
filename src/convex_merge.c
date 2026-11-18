@@ -2072,16 +2072,19 @@ static int b3GetMergeLimits( const b3ConvexMergeDef* def, b3AABB meshBounds, flo
 }
 
 // The step of a sweep to return. Each step is a point: hull count against the depth its hulls
-// seal. The hull count is scaled by that of the first step, the tightest, and the depth by the
-// loosest limit of the sweep, so a step's score depends on the step itself and on the range
-// swept, not on what the other steps happened to give. The step nearest to no hulls and nothing
-// sealed wins. Among steps with the same hull count only the first, the tightest, is a candidate.
+// seal. Both are scaled by their largest value over the steps, and the step nearest to no hulls
+// and nothing sealed wins. Among steps with the same hull count only the first, the tightest, is
+// a candidate.
 static int b3ChooseMergeStep( const b3ConvexMergeStep* steps, int count, float hullWeight )
 {
 	double weight = b3IsValidFloat( hullWeight ) && hullWeight > 0.0f ? (double)hullWeight : 1.0;
-	double hullScale = steps[0].hullCount > 0 ? (double)steps[0].hullCount : 1.0;
-	double depthScale =
-		steps[count - 1].maxConcavity > 0.0f ? (double)steps[count - 1].maxConcavity : 1.0;
+	int maxHulls = 0;
+	float maxSealed = 0.0f;
+	for ( int i = 0; i < count; ++i )
+	{
+		maxHulls = b3MaxInt( maxHulls, steps[i].hullCount );
+		maxSealed = b3MaxFloat( maxSealed, steps[i].sealedDepth );
+	}
 
 	int best = 0;
 	double bestScore = DBL_MAX;
@@ -2092,8 +2095,8 @@ static int b3ChooseMergeStep( const b3ConvexMergeStep* steps, int count, float h
 			continue;
 		}
 
-		double hulls = weight * (double)steps[i].hullCount / hullScale;
-		double sealed = (double)steps[i].sealedDepth / depthScale;
+		double hulls = maxHulls > 0 ? weight * (double)steps[i].hullCount / (double)maxHulls : 0.0;
+		double sealed = maxSealed > 0.0f ? (double)steps[i].sealedDepth / (double)maxSealed : 0.0;
 		double score = hulls * hulls + sealed * sealed;
 		if ( score < bestScore )
 		{

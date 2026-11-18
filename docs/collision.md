@@ -212,12 +212,11 @@ for (int i = 0; i < result->stepCount; ++i)
 }
 ```
 
-The chosen step is a heuristic. The hull count of each step is scaled by that of the first,
-the tightest, and its sealed depth by the loosest limit, and the step nearest to no hulls
-and nothing sealed wins. Each step is scored on its own, so a change at a step that is not
-chosen does not move the choice, but the choice moves with the range swept, and it is not
-the fewest hulls possible: the merge is greedy and can only join the pieces it started
-from.
+The chosen step is a heuristic. Hull count and sealed depth are each scaled by their
+largest value over the steps, and the step nearest to no hulls and nothing sealed wins. It
+moves with the range swept, and where two steps score about the same, a small change to the
+mesh can tip it from one to the other. It is not the fewest hulls possible either: the
+merge is greedy and can only join the pieces it started from.
 
 To choose by a rule of your own, sweep once, read the steps, and sweep again with
 `sweepStep` set to the step you want. Its hulls come back:
