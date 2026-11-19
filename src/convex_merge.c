@@ -57,8 +57,8 @@
 // a hull of triangles has 3V - 6 of them, so a hull of this many vertices always fits.
 #define B3_MERGE_MAX_HULL_VERTICES 44
 
-// With a hull budget still to meet once no neighbors are left to merge, each hull is linked to this
-// many of the hulls nearest to it
+// With a hull budget to meet past the limit, each hull is linked to this many of the hulls nearest
+// to it
 #define B3_MERGE_BUDGET_NEIGHBORS 4
 
 // The queue is cleared of stale entries instead of growing past this size
@@ -1905,9 +1905,9 @@ static float b3BoxDistanceSquared( b3AABB a, b3AABB b )
 	return b3LengthSquared( gap );
 }
 
-// A hull budget holds across gaps too. Once no linked pair is left while the budget is not met,
-// each hull is linked to the hulls nearest to it by a bridge, so parts of the mesh that do not
-// touch can merge, as far as the budget asks and no further. Returns whether any link was added.
+// A hull budget holds across gaps too. While the budget is not met, each hull is linked to the
+// hulls nearest to it by a bridge, so parts of the mesh that do not touch can merge, as far as the
+// budget asks and no further. Returns whether any link was added.
 static bool b3LinkNearest( b3MergeContext* ctx )
 {
 	int* alive = b3Alloc( (size_t)b3MaxInt( ctx->aliveCount, 1 ) * sizeof( int ) );
@@ -1995,6 +1995,16 @@ static void b3RunMerge( b3MergeContext* ctx, float maxConcavity, int maxHullCoun
 	// Only now may a budget force merges past the limit, so one that the merge at the limit meets
 	// by itself changes nothing
 	ctx->forceBudget = ctx->hasBudget;
+
+	// Parts that do not touch are linked before the budget forces anything, so they compete for
+	// the cheapest merge from the start. Linked only once the touching pairs ran out, they came
+	// too late: a mesh assembled from many separate parts had its touching parts forced into one
+	// hull, spanning its deepest open space, before any loose part could merge with a neighbor.
+	if ( ctx->hasBudget && ctx->aliveCount > maxHullCount )
+	{
+		b3LinkNearest( ctx );
+	}
+
 	if ( solidified || ( ctx->hasBudget && ctx->aliveCount > maxHullCount ) )
 	{
 		b3DrainQueue( ctx );

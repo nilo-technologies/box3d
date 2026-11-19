@@ -1153,6 +1153,57 @@ static int BudgetCrossesGaps( void )
 	return 0;
 }
 
+// The wall with the doorway, and beside it two blocks on the ground that touch nothing. That is
+// five hulls, and a budget of four asks for one merge. Joining the blocks seals only the hand's
+// width between them, joining two parts of the wall seals part of the doorway. The blocks are
+// linked to their neighbors from the start of the budget, so they get to merge. Linked only once
+// no touching pair was left, they came too late, and the wall was forced over the doorway.
+static int BudgetMergesLooseParts( void )
+{
+	WallMesh wall;
+	MakeWall( &wall, false );
+
+	static PartMesh mesh;
+	mesh = ( PartMesh ){ 0 };
+	for ( int i = 0; i < WALL_VERTEX_COUNT; ++i )
+	{
+		mesh.vertices[mesh.vertexCount++] = wall.vertices[i];
+	}
+
+	for ( int i = 0; i < WALL_TRIANGLE_COUNT; ++i )
+	{
+		AddTriangle( &mesh, wall.indices[3 * i], wall.indices[3 * i + 1], wall.indices[3 * i + 2] );
+	}
+
+	AddBox( &mesh, ( b3Vec3 ){ 3.0f, 0.0f, -0.1f }, ( b3Vec3 ){ 3.2f, 0.2f, 0.1f } );
+	AddBox( &mesh, ( b3Vec3 ){ 3.3f, 0.0f, -0.1f }, ( b3Vec3 ){ 3.5f, 0.2f, 0.1f } );
+
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	def.maxConcavity = 0.05f;
+	def.enableSweep = false;
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 5 );
+	ENSURE( IsCovered( result, ( b3Vec3 ){ 3.25f, 0.1f, 0.0f } ) == false );
+	b3DestroyConvexMergeResult( result );
+
+	def.maxHullCount = 4;
+	for ( int sweep = 0; sweep < 2; ++sweep )
+	{
+		def.enableSweep = sweep == 1;
+		result = b3MergeConvexPieces( &def );
+		ENSURE( result != NULL );
+		ENSURE( result->pieceCount == 4 );
+		ENSURE( IsCovered( result, ( b3Vec3 ){ 3.25f, 0.1f, 0.0f } ) );
+		ENSURE( IsCovered( result, ( b3Vec3 ){ -0.3f, 1.8f, 0.0f } ) == false );
+		ENSURE( IsCovered( result, ( b3Vec3 ){ 0.3f, 1.8f, 0.0f } ) == false );
+		ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.0f, 0.0f } ) == false );
+		b3DestroyConvexMergeResult( result );
+	}
+
+	return 0;
+}
+
 // A vertex limit past what b3CreateHull can hold under its edge cap is lowered to one it can, so
 // no merge fails for it and no piece is lost
 static int MergeHoldsHullsUnderEdgeCap( void )
@@ -1347,6 +1398,7 @@ int ConvexMergeTest( void )
 	RUN_SUBTEST( MergeRejectsNonFiniteInput );
 	RUN_SUBTEST( MergeAssemblesTouchingParts );
 	RUN_SUBTEST( BudgetCrossesGaps );
+	RUN_SUBTEST( BudgetMergesLooseParts );
 	RUN_SUBTEST( MergeHoldsHullsUnderEdgeCap );
 	RUN_SUBTEST( SweepStepReturnsThatStep );
 	RUN_SUBTEST( SameHullsWhateverWindingAndUnusedBudget );
