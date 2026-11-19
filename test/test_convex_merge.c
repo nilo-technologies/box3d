@@ -1153,6 +1153,56 @@ static int BudgetCrossesGaps( void )
 	return 0;
 }
 
+// A closed room, solid as the mesh has it, with a floor slab and a beam inside it. Each part is
+// closed on its own. The ray up from the floor meets the beam before it leaves the room, and
+// still starts inside the solid: covering it seals nothing, so the room is filled.
+static int MergeFillsClosedRoom( void )
+{
+	static PartMesh mesh;
+	mesh = ( PartMesh ){ 0 };
+	AddBox( &mesh, ( b3Vec3 ){ -2.0f, 0.0f, -2.0f }, ( b3Vec3 ){ 2.0f, 3.0f, 2.0f } );
+	AddBox( &mesh, ( b3Vec3 ){ -1.5f, 0.2f, -1.5f }, ( b3Vec3 ){ 1.5f, 0.4f, 1.5f } );
+	AddBox( &mesh, ( b3Vec3 ){ -1.5f, 2.4f, -0.3f }, ( b3Vec3 ){ 1.5f, 2.6f, 0.3f } );
+
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	for ( int sweep = 0; sweep < 2; ++sweep )
+	{
+		def.enableSweep = sweep == 1;
+		def.maxConcavity = sweep == 1 ? 0.0f : 0.05f;
+		b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+		ENSURE( result != NULL );
+		ENSURE( result->pieceCount == 1 );
+		ENSURE_SMALL( result->maxConcavity, 1e-3f );
+		ENSURE( IsCovered( result, ( b3Vec3 ){ 0.0f, 1.4f, 0.0f } ) );
+		ENSURE( IsCovered( result, ( b3Vec3 ){ 1.8f, 2.8f, 1.8f } ) );
+		b3DestroyConvexMergeResult( result );
+	}
+
+	return 0;
+}
+
+// A bar of four boxes, each closed on its own and touching the next face to face. Each box closes
+// into one hull at the limit, with no flat piece left, so only the boxes they touch link them.
+// The bar seals nothing and becomes one hull.
+static int MergeJoinsClosedParts( void )
+{
+	static PartMesh mesh;
+	mesh = ( PartMesh ){ 0 };
+	for ( int i = 0; i < 4; ++i )
+	{
+		AddBox( &mesh, ( b3Vec3 ){ (float)i, 0.0f, 0.0f }, ( b3Vec3 ){ (float)( i + 1 ), 1.0f, 1.0f } );
+	}
+
+	b3ConvexMergeDef def = MakePartDef( &mesh );
+	b3ConvexMergeResult* result = b3MergeConvexPieces( &def );
+	ENSURE( result != NULL );
+	ENSURE( result->pieceCount == 1 );
+	ENSURE_SMALL( result->maxConcavity, 1e-3f );
+	ENSURE_SMALL( GetVolume( result ) - 4.0f, 1e-3f );
+	b3DestroyConvexMergeResult( result );
+	return 0;
+}
+
 // The wall with the doorway, and beside it two blocks on the ground that touch nothing. That is
 // five hulls, and a budget of four asks for one merge. Joining the blocks seals only the hand's
 // width between them, joining two parts of the wall seals part of the doorway. The blocks are
@@ -1399,6 +1449,8 @@ int ConvexMergeTest( void )
 	RUN_SUBTEST( MergeAssemblesTouchingParts );
 	RUN_SUBTEST( BudgetCrossesGaps );
 	RUN_SUBTEST( BudgetMergesLooseParts );
+	RUN_SUBTEST( MergeFillsClosedRoom );
+	RUN_SUBTEST( MergeJoinsClosedParts );
 	RUN_SUBTEST( MergeHoldsHullsUnderEdgeCap );
 	RUN_SUBTEST( SweepStepReturnsThatStep );
 	RUN_SUBTEST( SameHullsWhateverWindingAndUnusedBudget );

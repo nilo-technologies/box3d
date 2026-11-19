@@ -286,6 +286,50 @@ static float b3MergeRayCast( const b3MergeContext* ctx, b3MeshData* data, b3Vec3
 	return output.hit ? output.fraction * length : FLT_MAX;
 }
 
+// The most faces b3RayWinding walks through before it gives up and calls the point outside
+#define B3_MERGE_WINDING_HITS 64
+
+// How many times over the solid holds the start of a ray: every face the ray leaves the solid
+// through on its way out of the mesh counts one, every face it enters through takes one away.
+// For a closed mesh that is the winding number of the point, also where closed parts overlap or
+// nest, which the first face along the ray cannot tell. firstEnter and firstLeave are the
+// distances to the first face of each kind, already cast.
+static int b3RayWinding( const b3MergeContext* ctx, b3MeshData* meshOutside, b3Vec3 start,
+						 b3Vec3 direction, float firstEnter, float firstLeave )
+{
+	float step = ctx->tolerance;
+	float reach = ctx->reach;
+	float enter = firstEnter;
+	float leave = firstLeave;
+	int winding = 0;
+	for ( int i = 0; i < B3_MERGE_WINDING_HITS; ++i )
+	{
+		if ( enter >= reach && leave >= reach )
+		{
+			return winding;
+		}
+
+		if ( leave <= enter )
+		{
+			winding += 1;
+			float from = leave + step;
+			float next = b3MergeRayCast( ctx, ctx->meshInside, b3MulAdd( start, from, direction ),
+										 direction, reach - from );
+			leave = next < FLT_MAX ? from + next : FLT_MAX;
+		}
+		else
+		{
+			winding -= 1;
+			float from = enter + step;
+			float next = b3MergeRayCast( ctx, meshOutside, b3MulAdd( start, from, direction ),
+										 direction, reach - from );
+			enter = next < FLT_MAX ? from + next : FLT_MAX;
+		}
+	}
+
+	return 0;
+}
+
 // The source triangles and the point of a closest query
 typedef struct b3MergeTriangles
 {
@@ -473,10 +517,18 @@ static void b3CreateMergeSamples( b3MergeContext* ctx, const b3ConvexMergeDef* d
 		float enters = b3MergeRayCast( ctx, meshOutside, start, sample->normal, reach );
 		float leaves = b3MergeRayCast( ctx, ctx->meshInside, start, sample->normal, reach );
 
-		// A ray that leaves solid before it meets a surface starts inside another part of the mesh:
-		// the sample is on a face buried in that part or pressed against it, and nothing a hull
-		// covers there is open space.
-		if ( leaves < enters )
+		// A ray that starts inside the solid starts inside another part of the mesh: the sample is
+		// on a face buried in that part or pressed against it, and nothing a hull covers there is
+		// open space. A ray that leaves solid before it meets a surface starts inside. One that
+		// first enters a part can still start inside a part around it, as a floor does in a closed
+		// room with a beam above, so the ray is followed out of the mesh.
+		bool buried = leaves < enters;
+		if ( buried == false && enters < FLT_MAX )
+		{
+			buried = b3RayWinding( ctx, meshOutside, start, sample->normal, enters, leaves ) > 0;
+		}
+
+		if ( buried )
 		{
 			sample->freeDistance = 0.0f;
 		}
@@ -1856,11 +1908,15 @@ static void b3QueueLinks( b3MergeContext* ctx, const bool* nodes )
 // Once the merge at a limit has run its course, the flat pieces left are made into hulls and get
 // to merge again as hulls, priced by the sample rays: a face that could not grow as a polygon
 // can still join the hull beside it, the two sides of a panel meet, and a piece inside another
-// hull merges into it for nothing. Returns whether any piece was made into a hull.
-static bool b3SolidifyFlatNodes( b3MergeContext* ctx )
+// hull merges into it for nothing.
+//
+// Then every hull is linked to the hulls whose boxes it touches. Triangles are only neighbors
+// along a shared edge, so a part of the mesh that is closed on its own has no link to the parts it
+// touches or passes into. A flat piece made into a hull gets them here, but a part that closes up
+// into one hull at the limit has no flat piece left, and without these links it could never
+// merge again: a model built from hundreds of closed parts kept hundreds of hulls.
+static void b3SolidifyFlatNodes( b3MergeContext* ctx )
 {
-	bool* solidified = b3AllocZero( (size_t)b3MaxInt( ctx->nodeCount, 1 ) * sizeof( bool ) );
-	bool any = false;
 	for ( int i = 0; i < ctx->nodeCount; ++i )
 	{
 		b3MergeNode* node = ctx->nodes + i;
@@ -1884,18 +1940,10 @@ static bool b3SolidifyFlatNodes( b3MergeContext* ctx )
 		node->concavity = sealed;
 		node->floor = b3MaxFloat( node->floor, sealed );
 		node->version += 1;
-		solidified[i] = true;
-		any = true;
 	}
 
-	if ( any )
-	{
-		b3LinkTouching( ctx, solidified, ctx->tolerance, false );
-		b3QueueLinks( ctx, solidified );
-	}
-
-	b3Free( solidified, (size_t)b3MaxInt( ctx->nodeCount, 1 ) * sizeof( bool ) );
-	return any;
+	b3LinkTouching( ctx, NULL, ctx->tolerance, true );
+	b3QueueLinks( ctx, NULL );
 }
 
 static float b3BoxDistanceSquared( b3AABB a, b3AABB b )
@@ -1990,7 +2038,7 @@ static void b3RunMerge( b3MergeContext* ctx, float maxConcavity, int maxHullCoun
 	ctx->forceBudget = false;
 	b3QueueLinks( ctx, NULL );
 	b3DrainQueue( ctx );
-	bool solidified = b3SolidifyFlatNodes( ctx );
+	b3SolidifyFlatNodes( ctx );
 
 	// Only now may a budget force merges past the limit, so one that the merge at the limit meets
 	// by itself changes nothing
@@ -2005,15 +2053,13 @@ static void b3RunMerge( b3MergeContext* ctx, float maxConcavity, int maxHullCoun
 		b3LinkNearest( ctx );
 	}
 
-	if ( solidified || ( ctx->hasBudget && ctx->aliveCount > maxHullCount ) )
-	{
-		b3DrainQueue( ctx );
-	}
+	b3DrainQueue( ctx );
 
 	while ( ctx->hasBudget && ctx->aliveCount > maxHullCount && b3LinkNearest( ctx ) )
 	{
 		b3DrainQueue( ctx );
 	}
+
 }
 
 // Pack the surviving hulls into one allocation, with room for the steps. Every live node is a
