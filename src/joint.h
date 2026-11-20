@@ -176,6 +176,9 @@ typedef struct b3WheeledVehicleWheelJoint
 	// Largest force the bump stop applies (N). Its impulse limit is this times the substep.
 	float maxBumpForce;
 
+	// Speed the bump stop pushes the chassis back out with while it is on the stop (m/s)
+	float bumpRebound;
+
 	float stiffness;
 	float compressionDamping;
 	float reboundDamping;

@@ -74,6 +74,12 @@ typedef struct b3WheeledVehicleSuspension
 
 	/// Hard stop at minLength so hard landings do not sink the wheel through the chassis
 	bool enableBumpStop;
+
+	/// How much of the speed the chassis meets the bump stop with it comes back up with, from 0 to 1.
+	/// At 0 the stop takes the whole landing and the car stays down. Above 0 a car that lands hard
+	/// enough to bottom out bounces, as off the rubber of a real bump stop. A stop met slower than
+	/// 1 m/s does not bounce, so driving over bumps does not set it off.
+	float bumpStopRestitution;
 } b3WheeledVehicleSuspension;
 
 /// Tire friction. Each axis is a 3 point curve: zero at no slip, rising to the peak, then
@@ -125,6 +131,13 @@ typedef struct b3WheeledVehicleTire
 	/// The load at which the friction coefficients above apply (N). 0 uses the wheel's static load,
 	/// so a car standing still grips as its coefficients say and only the weight transfer changes.
 	float referenceLoad;
+
+	/// How rounded the friction curves are, from 0 to 1. At 0 each curve is straight lines between
+	/// its three points. At 1 it is a smooth curve through the same points, as on a real tire: grip
+	/// builds 1.5 times as fast from no slip, eases into the peak, and eases from the peak into the
+	/// slide value, with no corner at either. The peak and slide values and where they sit do not
+	/// move. The steeper start makes the car answer the steering sooner at small slip angles.
+	float curveRounding;
 } b3WheeledVehicleTire;
 
 /// Wheel definition
@@ -315,6 +328,14 @@ typedef struct b3WheeledVehicleTransmission
 
 	/// Clutch coupling strength (N*m*s/rad)
 	float clutchStrength;
+
+	/// Shifts as a driver does. While the clutch is open the engine goes to the speed the gear it
+	/// is going into needs: the revs fall on an upshift and are blipped up on a downshift, within
+	/// shiftTime. Then the throttle comes back in with the clutch over clutchReleaseTime, so the
+	/// clutch takes up a matched engine. Without it the throttle returns the moment the shift ends,
+	/// with the clutch still open: the revs flare, and the clutch drags the engine to the new
+	/// speed, which kicks the car on an upshift and brakes the driven wheels on a downshift.
+	bool revMatch;
 } b3WheeledVehicleTransmission;
 
 /// A differential splits engine torque between two wheels
@@ -380,6 +401,16 @@ typedef struct b3WheeledVehicleSteering
 
 	/// 0 parallel steering, 1 full Ackermann geometry
 	float ackermann;
+
+	/// Extra lock while the input steers into a rear slide, as a fraction of the slide angle past the
+	/// rear tires' peak slip angle, from 0 to 1. It is for a car with a speed falloff (speedReference
+	/// above 0): the falloff leaves a few degrees of lock at speed, less than the angle the car is
+	/// sliding at, so opposite lock cannot point the wheels where the car is going. At 1, full
+	/// opposite lock adds the whole of that excess to the lock the speed leaves. It scales with the
+	/// input and never exceeds maxAngle, so with speedReference 0, where full input already gives
+	/// maxAngle, it adds nothing at full input. Steering away from the slide, and a rear that is
+	/// still within its grip, are unchanged. 0 is off.
+	float counterSteerLock;
 } b3WheeledVehicleSteering;
 
 /// Driving assists and arcade shortcuts
@@ -401,6 +432,24 @@ typedef struct b3WheeledVehicleAssists
 	/// It leaves room for the cornering force, so the car still steers while braking in a turn,
 	/// releases a wheel that slips past its peak, and caps engine braking on driven wheels too.
 	bool abs;
+
+	/// How much of the side grip ABS keeps free for steering goes to the brake instead, from 0 to 1,
+	/// on the wheels ahead of the center of mass. The wheels behind it always keep their side grip:
+	/// giving it up there swings the tail out under braking in a turn.
+	/// At 0 the cornering force keeps all its slip angle asks for and the brake gets what is left
+	/// (never under 30% of the peak): the car steers best under braking and slows the least. At 1
+	/// the brake is capped as in a straight line and the tire shares its grip as it does without
+	/// ABS, still without locking. The useful range is 0 to about 0.3: past it the tire's own
+	/// friction ellipse sets the split and more bias changes little. Around 0.2 a car held at its
+	/// front tires' peak slip angle slows as hard as without ABS and still turns more.
+	float absBrakeBias;
+
+	/// Extra grip on every tire while braking with the steered wheels cornering, as a fraction of
+	/// the grip, from 0 to 1 (0.1 is 10% more). An arcade aid for braking into a corner: it follows
+	/// the brake times how close the steered wheels are to their peak slip angle, and takes 0.2 s
+	/// to come in and to fade out. Braking in a straight line and cornering off the brake get
+	/// nothing. 0 is off.
+	float brakeSteerGrip;
 
 	/// Downforce coefficient, force = downforce * speed^2 (N*s^2/m^2)
 	float downforce;
@@ -515,6 +564,14 @@ typedef struct b3WheeledVehicleState
 
 	/// Launch control is managing the drive torque
 	bool isLaunching;
+
+	/// Traction control held the drive torque below what the throttle asked for in the last step.
+	/// False while launch control is doing that instead, and always false with the assist off.
+	bool isTractionControlActive;
+
+	/// ABS held the brake torque of at least one wheel below what the brake asked for in the last
+	/// step. Always false with the assist off.
+	bool isAbsActive;
 } b3WheeledVehicleState;
 
 /// Wheel readout, updated each step

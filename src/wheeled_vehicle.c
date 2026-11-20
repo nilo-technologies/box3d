@@ -51,6 +51,17 @@
 #ifndef B3_BUMP_STOP_MAX_LOAD
 #define B3_BUMP_STOP_MAX_LOAD 6.0f
 #endif
+
+// Bump stop restitution acts when the chassis meets the stop faster than this (m/s), as contact
+// restitution has its threshold: a wheel that taps its stop over a bump does not bounce the car
+#define B3_BUMP_STOP_BOUNCE_SPEED 1.0f
+
+// Changing direction with the automatic gearbox, the brake stays on down to this speed (m/s) while
+// the shift is still in progress
+#define B3_DIRECTION_STOP_SPEED 0.1f
+
+// Time the brake and steer grip takes to come in and to fade out (s)
+#define B3_BRAKE_STEER_GRIP_TIME 0.2f
 #define B3_RADIANS_TO_RPM ( 60.0f / ( 2.0f * B3_PI ) )
 #define B3_VEHICLE_RING_COUNT 12
 
@@ -84,6 +95,7 @@ b3WheeledVehicleWheelDef b3DefaultWheeledVehicleWheelDef( void )
 	def.suspension.compressionDamping = 0.5f;
 	def.suspension.reboundDamping = 0.8f;
 	def.suspension.enableBumpStop = true;
+	def.suspension.bumpStopRestitution = 0.0f;
 
 	def.tire.longitudinalPeakSlip = 0.1f;
 	def.tire.longitudinalPeakFriction = 1.2f;
@@ -97,6 +109,7 @@ b3WheeledVehicleWheelDef b3DefaultWheeledVehicleWheelDef( void )
 	def.tire.longitudinalRelaxationLength = 0.3f;
 	def.tire.loadSensitivity = 0.0f;
 	def.tire.referenceLoad = 0.0f;
+	def.tire.curveRounding = 0.0f;
 	return def;
 }
 
@@ -185,12 +198,15 @@ b3WheeledVehicleDef b3DefaultWheeledVehicleDef( void )
 	def.steering.speedReference = 10.0f;
 	def.steering.steerSpeed = 4.0f;
 	def.steering.returnSpeed = 6.0f;
+	def.steering.counterSteerLock = 0.0f;
 	def.steering.ackermann = 0.7f;
 
 	def.assists.counterSteer = 0.2f;
 	def.assists.driftGripScale = 1.0f;
 	def.assists.tractionControl = true;
 	def.assists.abs = false;
+	def.assists.absBrakeBias = 0.0f;
+	def.assists.brakeSteerGrip = 0.0f;
 	def.assists.downforce = 1.5f;
 	def.assists.drag = 0.6f;
 	def.assists.rollInfluence = 0.25f;
@@ -262,6 +278,7 @@ static b3WheeledVehicleWheelDef b3SanitizeWheel( b3WheeledVehicleWheelDef w )
 	s->frequency = b3SanitizeFloat( s->frequency, 0.0f, 100.0f, 0.0f );
 	s->compressionDamping = b3SanitizeFloat( s->compressionDamping, 0.0f, 100.0f, 0.0f );
 	s->reboundDamping = b3SanitizeFloat( s->reboundDamping, 0.0f, 100.0f, 0.0f );
+	s->bumpStopRestitution = b3SanitizeFloat( s->bumpStopRestitution, 0.0f, 1.0f, 0.0f );
 
 	b3WheeledVehicleTire* t = &w.tire;
 	t->longitudinalPeakSlip = b3SanitizeFloat( t->longitudinalPeakSlip, 1e-3f, 100.0f, 0.1f );
@@ -277,6 +294,7 @@ static b3WheeledVehicleWheelDef b3SanitizeWheel( b3WheeledVehicleWheelDef w )
 	t->longitudinalRelaxationLength = b3SanitizeFloat( t->longitudinalRelaxationLength, 0.0f, 10.0f, 0.0f );
 	t->loadSensitivity = b3SanitizeFloat( t->loadSensitivity, 0.0f, 1.0f, 0.0f );
 	t->referenceLoad = b3SanitizeFloat( t->referenceLoad, 0.0f, 1e7f, 0.0f );
+	t->curveRounding = b3SanitizeFloat( t->curveRounding, 0.0f, 1.0f, 0.0f );
 	return w;
 }
 
@@ -376,6 +394,7 @@ static b3WheeledVehicleSteering b3SanitizeSteering( b3WheeledVehicleSteering s )
 	s.steerSpeed = b3SanitizeFloat( s.steerSpeed, 0.0f, FLT_MAX, 0.0f );
 	s.returnSpeed = b3SanitizeFloat( s.returnSpeed, 0.0f, FLT_MAX, 0.0f );
 	s.ackermann = b3SanitizeFloat( s.ackermann, 0.0f, 1.0f, 0.0f );
+	s.counterSteerLock = b3SanitizeFloat( s.counterSteerLock, 0.0f, 1.0f, 0.0f );
 	return s;
 }
 
@@ -392,6 +411,8 @@ static b3WheeledVehicleAssists b3SanitizeAssists( b3WheeledVehicleAssists a )
 	a.maxTiltAngle = b3SanitizeFloat( a.maxTiltAngle, 0.0f, B3_PI, 0.0f );
 	a.stickySpeed = b3SanitizeFloat( a.stickySpeed, 0.0f, FLT_MAX, 0.0f );
 	a.stickyTime = b3SanitizeFloat( a.stickyTime, 0.0f, FLT_MAX, 0.0f );
+	a.absBrakeBias = b3SanitizeFloat( a.absBrakeBias, 0.0f, 1.0f, 0.0f );
+	a.brakeSteerGrip = b3SanitizeFloat( a.brakeSteerGrip, 0.0f, 1.0f, 0.0f );
 	return a;
 }
 
@@ -806,6 +827,7 @@ void b3WheeledVehicle_Reset( b3WheeledVehicleId wheeledVehicleId, b3Pos position
 		b3WheeledVehicleWheel* wheel = v->wheels + i;
 		wheel->omega = 0.0f;
 		wheel->stickyTimer = 0.0f;
+		wheel->bumpApproach = 0.0f;
 		b3ClearWheelContact( wheel );
 		if ( b3IsJointIdValidInternal( world, wheel->jointId ) )
 		{
@@ -838,6 +860,9 @@ void b3WheeledVehicle_Reset( b3WheeledVehicleId wheeledVehicleId, b3Pos position
 	v->stuck = false;
 	v->isLaunching = false;
 	v->launchSpent = false;
+	v->tractionControlActive = false;
+	v->absActive = false;
+	v->brakeSteerBlend = 0.0f;
 }
 
 void b3WheeledVehicle_SetChassis( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleChassis chassis )
@@ -984,6 +1009,8 @@ b3WheeledVehicleState b3WheeledVehicle_GetState( b3WheeledVehicleId wheeledVehic
 	state.wheelsInContact = v->wheelsInContact;
 	state.stuck = v->stuck;
 	state.isLaunching = v->isLaunching;
+	state.isTractionControlActive = v->tractionControlActive;
+	state.isAbsActive = v->absActive;
 	return state;
 }
 
@@ -1215,16 +1242,29 @@ static float b3TireLoadScale( const b3WheeledVehicleTire* tire, float load, floa
 	return 1.0f - k * ( ratio - 1.0f );
 }
 
-static float b3TireCurve( float slip, float peakSlip, float peakFriction, float slideSlip, float slideFriction )
+// The rise of a tire curve, from 0 at no slip to 1 at the peak, for x = slip / peak slip in [0, 1].
+// A straight line at rounding 0. At 1 a cubic that starts 1.5 times as steep and arrives level, so
+// the curve has no corner at the peak.
+static float b3TireRise( float x, float rounding )
+{
+	return x + rounding * x * 0.5f * ( 1.0f - x * x );
+}
+
+static float b3TireCurve( float slip, float peakSlip, float peakFriction, float slideSlip, float slideFriction, float rounding )
 {
 	if ( slip <= peakSlip )
 	{
-		return peakFriction * slip / peakSlip;
+		// The straight line as it was, plus the rounding on top, so that at rounding 0 the result
+		// is the same to the last bit as before the rounding existed
+		float x = slip / peakSlip;
+		return peakFriction * slip / peakSlip + peakFriction * ( b3TireRise( x, rounding ) - x );
 	}
 
 	if ( slip < slideSlip )
 	{
+		// Rounded, the way from the peak to the slide value leaves and arrives level (a smoothstep)
 		float t = ( slip - peakSlip ) / ( slideSlip - peakSlip );
+		t += rounding * ( t * t * ( 3.0f - 2.0f * t ) - t );
 		return b3LerpFloat( peakFriction, slideFriction, t );
 	}
 
@@ -1519,7 +1559,17 @@ static void b3UpdateGearbox( b3WheeledVehicle* v, float dt, float shiftRpm, bool
 				{
 					b3ShiftTo( v, 1 );
 				}
-				throttle = forward;
+
+				// Still rolling backward while the gearbox selects first: the clutch is open, so the
+				// throttle would do nothing and the car would coast. The brake finishes the stop.
+				if ( v->shiftTimer > 0.0f && v->speed < -B3_DIRECTION_STOP_SPEED )
+				{
+					brake = b3MaxFloat( brake, forward );
+				}
+				else
+				{
+					throttle = forward;
+				}
 			}
 		}
 		else if ( forward < 0.0f )
@@ -1534,7 +1584,17 @@ static void b3UpdateGearbox( b3WheeledVehicle* v, float dt, float shiftRpm, bool
 				{
 					b3ShiftTo( v, -1 );
 				}
-				throttle = -forward;
+
+				// The same the other way: a held brake that doubles as reverse let go at the switch
+				// speed, and the car rolled on at walking pace for as long as the shift took
+				if ( v->shiftTimer > 0.0f && v->speed > B3_DIRECTION_STOP_SPEED )
+				{
+					brake = b3MaxFloat( brake, -forward );
+				}
+				else
+				{
+					throttle = -forward;
+				}
 			}
 		}
 
@@ -1841,21 +1901,36 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		}
 		float target = -input->steer * maxAngle;
 
-		if ( v->assists.counterSteer > 0.0f && v->speed > 2.0f )
+		if ( ( v->assists.counterSteer > 0.0f || st->counterSteerLock > 0.0f ) && v->speed > 2.0f )
 		{
 			float rearOffset = 0.0f;
+			float rearPeak = FLT_MAX;
 			int rearCount = 0;
 			for ( int i = 0; i < wheelCount; ++i )
 			{
 				if ( v->wheels[i].def.steerFactor == 0.0f )
 				{
 					rearOffset += b3Dot( v->wheels[i].def.position, v->chassis.forward );
+					rearPeak = b3MinFloat( rearPeak, v->wheels[i].def.tire.lateralPeakAngle );
 					rearCount += 1;
 				}
 			}
 			rearOffset = rearCount > 0 ? rearOffset / rearCount : 0.0f;
+			rearPeak = rearCount > 0 ? rearPeak : 0.0f;
 			b3Vec3 rearVelocity = b3Add( linearVelocity, b3Cross( angularVelocity, b3MulSV( rearOffset, forward ) ) );
 			float slide = b3Atan2( b3Dot( rearVelocity, left ), b3MaxFloat( b3Dot( rearVelocity, forward ), 0.1f ) );
+
+			// Opposite lock: the input steers the way the rear is sliding. The speed falloff alone
+			// leaves less lock than the slide angle, so the driver could not point the wheels where
+			// the car is going. Only the slide past the rear tires' peak slip angle counts: under it
+			// the rear still grips, and extra lock on every change of direction over-rotates the car in
+			// a slalom. The extra shrinks with the slide, so it hands back as the car recovers.
+			float excess = b3MaxFloat( b3AbsFloat( slide ) - rearPeak, 0.0f );
+			if ( target * slide > 0.0f )
+			{
+				target += st->counterSteerLock * b3AbsFloat( input->steer ) * ( slide > 0.0f ? excess : -excess );
+			}
+
 			target += v->assists.counterSteer * slide;
 		}
 
@@ -1967,6 +2042,38 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 	float lateralRoom[B3_MAX_VEHICLE_WHEELS] = { 0 };
 	// With ABS, the engine braking a wheel may still take on top of its service brake
 	float absRoom[B3_MAX_VEHICLE_WHEELS];
+
+	// Set below wherever an assist cuts a torque this step
+	v->absActive = false;
+	v->tractionControlActive = false;
+
+	// Brake and steer grip: extra grip on every tire while the car brakes with its steered wheels
+	// cornering. It follows the brake times how much of their peak slip angle the steered wheels
+	// are at (from the last step), and comes in and fades out over a fixed time, so letting go of
+	// the brake mid corner does not drop the grip in one step.
+	float gripBoost = 1.0f;
+	if ( v->assists.brakeSteerGrip > 0.0f )
+	{
+		float use = 0.0f;
+		for ( int i = 0; i < wheelCount; ++i )
+		{
+			const b3WheeledVehicleWheel* wheel = v->wheels + i;
+			float peakAngle = wheel->def.tire.lateralPeakAngle;
+			if ( wheel->def.steerFactor != 0.0f && wheel->hasContact && peakAngle > 0.0f )
+			{
+				use = b3MaxFloat( use, b3MinFloat( b3AbsFloat( wheel->slipAngle ) / peakAngle, 1.0f ) );
+			}
+		}
+
+		float step = dt / B3_BRAKE_STEER_GRIP_TIME;
+		v->brakeSteerBlend += b3ClampFloat( brake * use - v->brakeSteerBlend, -step, step );
+		gripBoost = 1.0f + v->assists.brakeSteerGrip * v->brakeSteerBlend;
+	}
+	else
+	{
+		v->brakeSteerBlend = 0.0f;
+	}
+
 	b3Vec3 localCenter = b3Body_GetLocalCenter( v->chassisId );
 	float gravity = b3GravityLength( world );
 	for ( int i = 0; i < wheelCount; ++i )
@@ -2037,8 +2144,9 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		// lateral force, the longitudinal peak and the ABS and traction control caps all agree. The
 		// reference is the static load on level ground, so the coefficients hold for a car at rest.
 		float ground = frame->groundScale * b3TireLoadScale( tire, load, wheel->sprungMass * gravity );
+		ground *= gripBoost;
 		float muY = ground * b3TireCurve( b3AbsFloat( wheel->slipAngle ), tire->lateralPeakAngle, tire->lateralPeakFriction,
-										  tire->lateralSlideAngle, tire->lateralSlideFriction );
+										  tire->lateralSlideAngle, tire->lateralSlideFriction, tire->curveRounding );
 
 		float drift = 1.0f;
 		if ( def->maxHandBrakeTorque > 0.0f && handbrake > 0.0f )
@@ -2049,10 +2157,10 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		muY *= drift;
 		float peakX = ground * b3TireCurve( b3MaxFloat( b3AbsFloat( wheel->slipRatio ), tire->longitudinalPeakSlip ),
 											 tire->longitudinalPeakSlip, tire->longitudinalPeakFriction,
-											 tire->longitudinalSlideSlip, tire->longitudinalSlideFriction );
+											 tire->longitudinalSlideSlip, tire->longitudinalSlideFriction, tire->curveRounding );
 		float peakY = drift * ground *
 					  b3TireCurve( b3MaxFloat( b3AbsFloat( wheel->slipAngle ), tire->lateralPeakAngle ), tire->lateralPeakAngle,
-								   tire->lateralPeakFriction, tire->lateralSlideAngle, tire->lateralSlideFriction );
+								   tire->lateralPeakFriction, tire->lateralSlideAngle, tire->lateralSlideFriction, tire->curveRounding );
 
 		// Sticky tire: pure stiction near rest so the car does not creep or jitter. Braking engages it
 		// at once, idling after a short delay. It stays engaged up to twice the speed it engaged at.
@@ -2092,10 +2200,18 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		float rolling = tire->rollingResistance * load * def->radius;
 		if ( v->assists.abs && wheel->isSticky == false )
 		{
+			// The share of the side grip in use at this slip angle, on the tire's own curve
 			float lateralUse = tire->lateralPeakAngle > 0.0f
-								   ? b3MinFloat( b3AbsFloat( wheel->slipAngle ) / tire->lateralPeakAngle, 1.0f )
+								   ? b3TireRise( b3MinFloat( b3AbsFloat( wheel->slipAngle ) / tire->lateralPeakAngle, 1.0f ),
+												 tire->curveRounding )
 								   : 0.0f;
-			float room = b3MaxFloat( sqrtf( 1.0f - lateralUse * lateralUse ), 0.3f );
+			// The brake bias hands part of that side grip to the brake instead: at 0 the cornering
+			// force keeps all it asks for, at 1 the brake is capped as in a straight line. Only on
+			// wheels ahead of the center of mass: a front tire that gives up side grip to brake
+			// runs the car wide, while a rear tire that does swings the tail out.
+			bool ahead = b3Dot( b3Sub( def->position, localCenter ), v->chassis.forward ) > 0.0f;
+			float reserved = ( 1.0f - ( ahead ? v->assists.absBrakeBias : 0.0f ) ) * lateralUse;
+			float room = b3MaxFloat( sqrtf( 1.0f - reserved * reserved ), 0.3f );
 			float limit = room * ground * tire->longitudinalPeakFriction * load * def->radius;
 
 			// A wheel past its peak slip needs only the sliding torque to stay locked, which is less
@@ -2108,6 +2224,10 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 
 			limit = b3MaxFloat( limit - rolling, 0.0f );
 			float applied = b3MinFloat( serviceTorque, limit );
+			if ( applied < serviceTorque )
+			{
+				v->absActive = true;
+			}
 			brakeTorque -= serviceTorque - applied;
 			absRoom[i] = limit - applied;
 		}
@@ -2230,6 +2350,23 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 			clutch = 0.0f;
 		}
 
+		// Rev matched shift. With the clutch open the engine goes to the speed of the gear it is
+		// going into, most of the way within the shift time. Then the throttle follows the clutch
+		// back in, so the engine does not rev up against a clutch that is still slipping.
+		if ( t->revMatch && v->gear != 0 && A > 0.0f )
+		{
+			if ( v->shiftTimer > 0.0f && t->shiftTime > 0.0f )
+			{
+				float target = b3ClampFloat( gearSpeed, idle, e->maxRpm * B3_RPM_TO_RADIANS );
+				float rate = 4.0f * h / t->shiftTime;
+				v->engineSpeed += ( target - v->engineSpeed ) * ( rate / ( 1.0f + rate ) );
+			}
+			else if ( v->clutchTimer > 0.0f && t->clutchReleaseTime > 0.0f )
+			{
+				throttle *= clutch;
+			}
+		}
+
 		float k = t->clutchStrength * clutch;
 		float rpm = v->engineSpeed * B3_RADIANS_TO_RPM;
 
@@ -2290,6 +2427,13 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 					float needed = ( target * det / k + b * lump - e->inertia * v->engineSpeed ) / h;
 					engineCap = b3MaxFloat( engineCap, needed + parasiticTorque );
 				}
+
+				// Launch control reports itself (isLaunching); this is traction control alone
+				if ( launching == false && engineCap / curve < torqueScale )
+				{
+					v->tractionControlActive = true;
+				}
+
 				torqueScale = b3MinFloat( torqueScale, engineCap / curve );
 			}
 		}
@@ -2413,6 +2557,11 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 			// has the opposite sign and was capped by ABS above.
 			if ( limitTraction && wheel->hasContact && torque * ratio > 0.0f )
 			{
+				if ( launching == false && b3AbsFloat( torque ) > tractionTorque[i] )
+				{
+					v->tractionControlActive = true;
+				}
+
 				torque = b3MinFloat( b3AbsFloat( torque ), tractionTorque[i] ) * ( ratio > 0.0f ? 1.0f : -1.0f );
 			}
 			wheel->driveTorque = torque;
@@ -2466,6 +2615,8 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 
 		if ( wheel->hasContact == false )
 		{
+			wheel->bumpApproach = 0.0f;
+			sim->bumpRebound = 0.0f;
 			sim->springImpulse = 0.0f;
 			sim->bumpImpulse = 0.0f;
 			sim->lateralImpulse = 0.0f;
@@ -2494,6 +2645,28 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		sim->springC = springC;
 		sim->bumpC = ( wheel->suspensionLength - s->minLength ) * cosAngle;
 		sim->maxBumpForce = bumpStopGravity > 0.0f ? B3_BUMP_STOP_MAX_LOAD * wheel->sprungMass * bumpStopGravity : FLT_MAX;
+
+		// Bump stop restitution: remember the fastest the chassis closed on the stop while the stop is
+		// engaged (it will be this step, or it pushed last step), and have the stop push the chassis
+		// back out at a share of that speed. The memory clears once the suspension is off the stop.
+		sim->bumpRebound = 0.0f;
+		if ( s->enableBumpStop && s->bumpStopRestitution > 0.0f )
+		{
+			b3Vec3 vc = b3Body_GetWorldPointVelocity( v->chassisId, wheel->contactPoint );
+			if ( B3_ID_EQUALS( frame->groundBodyId, anchorId ) == false )
+			{
+				vc = b3Sub( vc, b3Body_GetWorldPointVelocity( frame->groundBodyId, wheel->contactPoint ) );
+			}
+
+			float closing = -b3Dot( vc, wheel->contactNormal );
+			bool engaged = sim->bumpImpulse > 0.0f || sim->bumpC - closing * dt < 0.0f;
+			wheel->bumpApproach = engaged ? b3MaxFloat( wheel->bumpApproach, closing ) : 0.0f;
+			sim->bumpRebound = wheel->bumpApproach > B3_BUMP_STOP_BOUNCE_SPEED ? s->bumpStopRestitution * wheel->bumpApproach : 0.0f;
+		}
+		else
+		{
+			wheel->bumpApproach = 0.0f;
+		}
 		sim->stiffness = stiffness;
 		sim->compressionDamping = wheel->compressionDamping;
 		sim->reboundDamping = wheel->reboundDamping;
