@@ -28,6 +28,9 @@ typedef struct b3WheeledVehicleWheel
 	float steerAngle;
 	float stickyTimer;
 
+	// Fastest the chassis has closed on the bump stop since the stop engaged (m/s), 0 while it is free
+	float bumpApproach;
+
 	// Last cast and solve results
 	b3Pos contactPoint;
 	b3Vec3 contactNormal;
@@ -101,6 +104,10 @@ typedef struct b3WheeledVehicle
 	bool isLaunching;
 	bool launchSpent;
 	float launchTimer;
+
+	// Whether traction control and ABS cut a torque in the last step, for the state readout
+	bool tractionControlActive;
+	bool absActive;
 } b3WheeledVehicle;
 
 b3DeclareArray( b3WheeledVehicle );

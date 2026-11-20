@@ -813,6 +813,277 @@ static int TurningTest( void )
 	return 0;
 }
 
+// Steer angle after holding an input for a second in a car sliding sideways at 25 m/s with the tail
+// out to the right by `slide` radians, so the car travels to the left of where it points (a positive
+// slide, which positive steer angles, to the left, steer into)
+static float SlideSteerAngle( float counterSteerLock, float steer, float slide )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.steering.counterSteerLock = counterSteerLock;
+	def.assists.counterSteer = 0.0f;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
+	Step( worldId, 60 );
+
+	// The car faces +z with +x to its left
+	float angle = 0.0f;
+	for ( int i = 0; i < 60; ++i )
+	{
+		b3Body_SetLinearVelocity( chassisId, (b3Vec3){ 25.0f * sinf( slide ), 0.0f, 25.0f * cosf( slide ) } );
+		b3Body_SetAngularVelocity( chassisId, b3Vec3_zero );
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .steer = steer } );
+		Step( worldId, 1 );
+		angle = b3WheeledVehicle_GetState( wheeledVehicleId ).steerAngle;
+	}
+
+	b3DestroyWorld( worldId );
+	return angle;
+}
+
+// Counter steer lock: opposite lock in a slide reaches past the speed's own lock, toward the slide
+// only, in proportion to the input, never past the max angle, and not while the rear still grips
+static int CounterSteerLockTest( void )
+{
+	b3WheeledVehicleSteering st = b3DefaultWheeledVehicleDef().steering;
+	float x = 25.0f / st.speedReference;
+	float speedLock = st.maxAngle / ( 1.0f + x * x );
+
+	// Negative steer input is left, the way this car is sliding: 20 degrees, with a rear tire that
+	// peaks at 7
+	float slide = 0.35f;
+	float excess = slide - b3DefaultWheeledVehicleDef().wheels[2].tire.lateralPeakAngle;
+	float plain = SlideSteerAngle( 0.0f, -1.0f, slide );
+	float into = SlideSteerAngle( 1.0f, -1.0f, slide );
+	float half = SlideSteerAngle( 1.0f, -0.5f, slide );
+	float away = SlideSteerAngle( 1.0f, 1.0f, slide );
+	float none = SlideSteerAngle( 1.0f, 0.0f, slide );
+
+	// 4 degrees of slide: the rear is within its grip
+	float gripping = SlideSteerAngle( 1.0f, -1.0f, 0.07f );
+	float grippingPlain = SlideSteerAngle( 0.0f, -1.0f, 0.07f );
+	printf( "    speed lock %.3f rad; into the slide %.3f without and %.3f with, %.3f at half input; away %.3f; no input %.3f\n",
+			speedLock, plain, into, half, away, none );
+	ENSURE( b3AbsFloat( plain - speedLock ) < 0.02f );
+	ENSURE( b3AbsFloat( into - ( plain + excess ) ) < 0.02f );
+	ENSURE( into <= st.maxAngle + 1e-4f );
+	ENSURE( b3AbsFloat( half - 0.5f * ( plain + excess ) ) < 0.02f );
+	ENSURE( b3AbsFloat( gripping - grippingPlain ) < 1e-4f );
+	ENSURE( b3AbsFloat( away + speedLock ) < 0.02f );
+	ENSURE( b3AbsFloat( none ) < 1e-4f );
+	return 0;
+}
+
+// Side force of the car, as a share of its weight, held sliding sideways at a slip angle at 20 m/s
+static float SideForceShare( float curveRounding, float slipAngle )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	for ( int i = 0; i < def.wheelCount; ++i )
+	{
+		def.wheels[i].tire.curveRounding = curveRounding;
+	}
+	def.assists.counterSteer = 0.0f;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
+	Step( worldId, 60 );
+
+	float force = 0.0f, load = 0.0f;
+	for ( int i = 0; i < 30; ++i )
+	{
+		b3Body_SetLinearVelocity( chassisId, (b3Vec3){ 20.0f * sinf( slipAngle ), 0.0f, 20.0f * cosf( slipAngle ) } );
+		b3Body_SetAngularVelocity( chassisId, b3Vec3_zero );
+		b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ 0 } );
+		Step( worldId, 1 );
+		force = 0.0f;
+		load = 0.0f;
+		for ( int j = 0; j < 4; ++j )
+		{
+			b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, j );
+			force += fabsf( ws.lateralForce );
+			load += ws.load;
+		}
+	}
+
+	b3DestroyWorld( worldId );
+	return load > 0.0f ? force / load : 0.0f;
+}
+
+// Curve rounding: the same peak and slide values, more grip on the way up, no corner at the peak
+static int TireCurveRoundingTest( void )
+{
+	b3WheeledVehicleTire tire = b3DefaultWheeledVehicleDef().wheels[0].tire;
+	float peak = tire.lateralPeakAngle;
+	float low = SideForceShare( 0.0f, 0.5f * peak );
+	float lowRound = SideForceShare( 1.0f, 0.5f * peak );
+	float nearPeak = SideForceShare( 0.0f, 0.9f * peak );
+	float nearPeakRound = SideForceShare( 1.0f, 0.9f * peak );
+	float sliding = SideForceShare( 0.0f, tire.lateralSlideAngle + 0.1f );
+	float slidingRound = SideForceShare( 1.0f, tire.lateralSlideAngle + 0.1f );
+	printf( "    side force / load at half the peak angle %.3f straight, %.3f rounded; near the peak %.3f, %.3f; sliding %.3f, %.3f\n",
+			low, lowRound, nearPeak, nearPeakRound, sliding, slidingRound );
+
+	// At half the peak slip the cubic gives 0.6875 of the peak against 0.5
+	ENSURE( lowRound > 1.25f * low && lowRound < 1.5f * low );
+
+	// Level at the peak: just short of it the rounded curve is nearly there, the straight one is not
+	ENSURE( nearPeakRound > 1.05f * nearPeak );
+
+	// Fully sliding, the two are the same tire
+	ENSURE( b3AbsFloat( slidingRound - sliding ) < 0.02f );
+	return 0;
+}
+
+typedef struct ShiftResult
+{
+	// Revs when the 2 to 3 upshift starts, the highest in the half second after, and at the step
+	// the clutch starts to close, next to what third gear needs at that road speed (rpm)
+	float startRpm, peakRpm, biteRpm, neededRpm;
+	bool shifted;
+} ShiftResult;
+
+// Full throttle from rest through the upshift into third
+static ShiftResult UpshiftRevs( bool revMatch )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.transmission.revMatch = revMatch;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 60 );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
+
+	ShiftResult result = { 0 };
+	int window = 0;
+	bool wasShifting = false;
+	float lastRpm = 0.0f;
+	for ( int i = 0; i < 1800 && ( result.shifted == false || window > 0 ); ++i )
+	{
+		Step( worldId, 1 );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
+		if ( result.shifted == false && state.gear == 3 )
+		{
+			result.shifted = true;
+			result.startRpm = lastRpm;
+			window = 30;
+		}
+
+		if ( window > 0 )
+		{
+			window -= 1;
+			result.peakRpm = b3MaxFloat( result.peakRpm, state.engineRpm );
+			if ( wasShifting && state.isShifting == false )
+			{
+				float ratio = def.transmission.gearRatios[2] * def.transmission.finalDrive;
+				result.biteRpm = state.engineRpm;
+				result.neededRpm = state.speed / def.wheels[2].radius * ratio * 60.0f / ( 2.0f * B3_PI );
+			}
+		}
+
+		wasShifting = state.isShifting;
+		lastRpm = state.engineRpm;
+	}
+
+	b3DestroyWorld( worldId );
+	return result;
+}
+
+// Rev matching: the revs fall to the next gear during an upshift and do not flare
+static int RevMatchTest( void )
+{
+	ShiftResult plain = UpshiftRevs( false );
+	ShiftResult matched = UpshiftRevs( true );
+	printf( "    2-3 upshift: plain %.0f rpm, peak %.0f, clutch closes at %.0f needing %.0f; rev matched %.0f, peak %.0f, closes at %.0f needing %.0f\n",
+			plain.startRpm, plain.peakRpm, plain.biteRpm, plain.neededRpm, matched.startRpm, matched.peakRpm, matched.biteRpm,
+			matched.neededRpm );
+	ENSURE( plain.shifted && matched.shifted );
+
+	// Without it the engine is still far above the new gear when the clutch starts to close
+	ENSURE( plain.biteRpm > plain.neededRpm + 800.0f );
+
+	// With it the engine is close to the new gear by then, and never goes above where it started
+	ENSURE( b3AbsFloat( matched.biteRpm - matched.neededRpm ) < 400.0f );
+	ENSURE( matched.peakRpm <= matched.startRpm + 1.0f );
+	return 0;
+}
+
+typedef struct AssistFlags
+{
+	// Seen at any step of the run
+	bool traction, abs, launching;
+
+	// Still set a second after the driver lets go of everything
+	bool tractionAfter, absAfter;
+} AssistFlags;
+
+// Full throttle from rest for two seconds, then a full brake from speed, then hands off. On
+// slippery ground, so the assists have something to do.
+static AssistFlags RunAssists( bool tractionControl, bool abs, bool launchControl )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateGroundBox( worldId, (b3Pos){ 0.0f, -1.0f, 0.0f }, b3Quat_identity, (b3Vec3){ 2000.0f, 1.0f, 2000.0f }, 0.3f );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.assists.tractionControl = tractionControl;
+	def.assists.abs = abs;
+	def.assists.launchControl = launchControl;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 60 );
+
+	AssistFlags flags = { 0 };
+	for ( int i = 0; i < 360; ++i )
+	{
+		b3WheeledVehicleInput input = { 0 };
+		if ( i < 180 )
+		{
+			input.forward = 1.0f;
+		}
+		else if ( i < 300 )
+		{
+			input.brake = 1.0f;
+		}
+
+		b3WheeledVehicle_SetInput( wheeledVehicleId, input );
+		Step( worldId, 1 );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
+		flags.traction = flags.traction || state.isTractionControlActive;
+		flags.abs = flags.abs || state.isAbsActive;
+		flags.launching = flags.launching || state.isLaunching;
+		if ( i == 359 )
+		{
+			flags.tractionAfter = state.isTractionControlActive;
+			flags.absAfter = state.isAbsActive;
+		}
+	}
+
+	b3DestroyWorld( worldId );
+	return flags;
+}
+
+// The state says when traction control and ABS are intervening, and only then
+static int AssistStateTest( void )
+{
+	AssistFlags on = RunAssists( true, true, false );
+	AssistFlags off = RunAssists( false, false, false );
+	AssistFlags launch = RunAssists( true, true, true );
+	printf( "    assists on: traction %d abs %d, after %d %d; off: %d %d; with launch control: launching %d\n", on.traction, on.abs,
+			on.tractionAfter, on.absAfter, off.traction, off.abs, launch.launching );
+
+	// On slippery ground full throttle and a full brake both need the assist
+	ENSURE( on.traction && on.abs );
+
+	// Hands off, neither is doing anything
+	ENSURE( on.tractionAfter == false && on.absAfter == false );
+
+	// With the assists off the flags never show
+	ENSURE( off.traction == false && off.abs == false );
+
+	// Launch control still reports through isLaunching
+	ENSURE( launch.launching && on.launching == false );
+	return 0;
+}
+
 static int AntiRollTest( void )
 {
 	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
@@ -2023,6 +2294,106 @@ static int TurboTest( void )
 // A car on its roof must right itself: dropped tilted, dropped dead level, and placed level at
 // rest. Level, the roll from upright is about pi and its sign, which picks the side to roll toward,
 // flips from step to step. At rest, the car must not fall asleep before the stuck timer fires.
+typedef struct DropResult
+{
+	// How far the chassis sank below its ride height on landing, and rose above it afterwards (m)
+	float sink;
+	float rebound;
+
+	// Time with no wheel on the ground after the first touchdown (s)
+	float airTime;
+	bool finite;
+} DropResult;
+
+// Drops the default car flat from a height above its ride height, with the bump stop restitution
+// on every wheel
+static DropResult DropCar( float height, float restitution )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	for ( int i = 0; i < def.wheelCount; ++i )
+	{
+		def.wheels[i].suspension.bumpStopRestitution = restitution;
+	}
+
+	// Ride height, from a car left to settle out of the way
+	b3WheeledVehicleId parkedId = CreateCar( worldId, (b3Pos){ 30.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 180 );
+	float ride = (float)b3Body_GetPosition( b3WheeledVehicle_GetChassisBody( parkedId ) ).y;
+
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, ride + height, 0.0f }, &def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
+
+	DropResult result = { 0 };
+	bool touched = false;
+	float lowest = FLT_MAX;
+	for ( int i = 0; i < 480; ++i )
+	{
+		Step( worldId, 1 );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
+		float y = (float)b3Body_GetPosition( chassisId ).y - ride;
+		touched = touched || state.wheelsInContact > 0;
+		if ( touched == false )
+		{
+			continue;
+		}
+
+		if ( y < lowest )
+		{
+			// Sinking: whatever height came before this was the fall, not the rebound
+			lowest = y;
+			result.rebound = 0.0f;
+		}
+		else
+		{
+			result.rebound = b3MaxFloat( result.rebound, y );
+		}
+
+		if ( state.wheelsInContact == 0 )
+		{
+			result.airTime += VEHICLE_DT;
+		}
+	}
+
+	result.sink = -lowest;
+	result.finite = WheeledVehicleIsFinite( wheeledVehicleId );
+	b3DestroyWorld( worldId );
+	return result;
+}
+
+// Bump stop restitution: a hard landing bounces the car, a soft one and a car without it do not
+static int BumpStopRestitutionTest( void )
+{
+	// From 3 m the default car reaches its bump stops at about 5 m/s
+	DropResult dead = DropCar( 3.0f, 0.0f );
+	DropResult half = DropCar( 3.0f, 0.5f );
+	DropResult full = DropCar( 3.0f, 1.0f );
+	DropResult soft = DropCar( 0.05f, 1.0f );
+	DropResult softDead = DropCar( 0.05f, 0.0f );
+	printf( "    3 m drop: restitution 0 sinks %.3f rebounds %.3f air %.2f s, 0.5 rebounds %.3f air %.2f s, 1 rebounds %.3f air "
+			"%.2f s; 5 cm drop: rebounds %.3f against %.3f\n",
+			dead.sink, dead.rebound, dead.airTime, half.rebound, half.airTime, full.rebound, full.airTime, soft.rebound,
+			softDead.rebound );
+	ENSURE( dead.finite && half.finite && full.finite && soft.finite );
+
+	// Without restitution the stop takes the landing and the car stays down
+	ENSURE( dead.airTime == 0.0f );
+	ENSURE( dead.rebound < 0.05f );
+
+	// With it the car comes back up, the more the higher the restitution, and never higher than it fell
+	ENSURE( half.rebound > dead.rebound + 0.05f );
+	ENSURE( full.rebound > half.rebound + 0.05f );
+	ENSURE( full.rebound < 3.0f );
+	ENSURE( half.airTime > 0.0f );
+
+	// A drop too small to reach the stop at speed is the same with and without
+	ENSURE( b3AbsFloat( soft.rebound - softDead.rebound ) < 0.005f );
+	ENSURE( soft.airTime == 0.0f );
+
+	return 0;
+}
+
 static int LevelRoofTest( void )
 {
 	for ( int scenario = 0; scenario < 3; ++scenario )
@@ -2063,6 +2434,10 @@ int WheeledVehicleTest( void )
 	RUN_SUBTEST( BrakeReverseTest );
 	RUN_SUBTEST( TurningTest );
 	RUN_SUBTEST( AntiRollTest );
+	RUN_SUBTEST( CounterSteerLockTest );
+	RUN_SUBTEST( TireCurveRoundingTest );
+	RUN_SUBTEST( RevMatchTest );
+	RUN_SUBTEST( AssistStateTest );
 	RUN_SUBTEST( LoadSensitivityTest );
 	RUN_SUBTEST( SlopeHoldTest );
 	RUN_SUBTEST( DynamicGroundTest );
@@ -2078,6 +2453,7 @@ int WheeledVehicleTest( void )
 	RUN_SUBTEST( MeshMaterialTest );
 	RUN_SUBTEST( TouchdownBrakeTest );
 	RUN_SUBTEST( TurboTest );
+	RUN_SUBTEST( BumpStopRestitutionTest );
 	RUN_SUBTEST( LevelRoofTest );
 	return 0;
 }

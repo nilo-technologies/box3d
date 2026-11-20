@@ -74,6 +74,12 @@ typedef struct b3WheeledVehicleSuspension
 
 	/// Hard stop at minLength so hard landings do not sink the wheel through the chassis
 	bool enableBumpStop;
+
+	/// How much of the speed the chassis meets the bump stop with it comes back up with, from 0 to 1.
+	/// At 0 the stop takes the whole landing and the car stays down. Above 0 a car that lands hard
+	/// enough to bottom out bounces, as off the rubber of a real bump stop. A stop met slower than
+	/// 1 m/s does not bounce, so driving over bumps does not set it off.
+	float bumpStopRestitution;
 } b3WheeledVehicleSuspension;
 
 /// Tire friction. Each axis is a 3 point curve: zero at no slip, rising to the peak, then
@@ -125,6 +131,13 @@ typedef struct b3WheeledVehicleTire
 	/// The load at which the friction coefficients above apply (N). 0 uses the wheel's static load,
 	/// so a car standing still grips as its coefficients say and only the weight transfer changes.
 	float referenceLoad;
+
+	/// How rounded the friction curves are, from 0 to 1. At 0 each curve is straight lines between
+	/// its three points. At 1 it is a smooth curve through the same points, as on a real tire: grip
+	/// builds 1.5 times as fast from no slip, eases into the peak, and eases from the peak into the
+	/// slide value, with no corner at either. The peak and slide values and where they sit do not
+	/// move. The steeper start makes the car answer the steering sooner at small slip angles.
+	float curveRounding;
 } b3WheeledVehicleTire;
 
 /// Wheel definition
@@ -315,6 +328,14 @@ typedef struct b3WheeledVehicleTransmission
 
 	/// Clutch coupling strength (N*m*s/rad)
 	float clutchStrength;
+
+	/// Shifts as a driver does. While the clutch is open the engine goes to the speed the gear it
+	/// is going into needs: the revs fall on an upshift and are blipped up on a downshift, within
+	/// shiftTime. Then the throttle comes back in with the clutch over clutchReleaseTime, so the
+	/// clutch takes up a matched engine. Without it the throttle returns the moment the shift ends,
+	/// with the clutch still open: the revs flare, and the clutch drags the engine to the new
+	/// speed, which kicks the car on an upshift and brakes the driven wheels on a downshift.
+	bool revMatch;
 } b3WheeledVehicleTransmission;
 
 /// A differential splits engine torque between two wheels
@@ -380,6 +401,14 @@ typedef struct b3WheeledVehicleSteering
 
 	/// 0 parallel steering, 1 full Ackermann geometry
 	float ackermann;
+
+	/// Extra lock while the input steers into a rear slide, as a fraction of the slide angle past the
+	/// rear tires' peak slip angle, from 0 to 1. The speed falloff leaves a few degrees of lock at
+	/// speed, less than the angle the car is sliding at, so opposite lock cannot point the wheels
+	/// where the car is going. At 1, full opposite lock adds the whole of that excess to the speed's
+	/// own lock. It scales with the input and never exceeds maxAngle. Steering away from the slide,
+	/// and a rear that is still within its grip, are unchanged. 0 is off.
+	float counterSteerLock;
 } b3WheeledVehicleSteering;
 
 /// Driving assists and arcade shortcuts
@@ -515,6 +544,14 @@ typedef struct b3WheeledVehicleState
 
 	/// Launch control is managing the drive torque
 	bool isLaunching;
+
+	/// Traction control held the drive torque below what the throttle asked for in the last step.
+	/// False while launch control is doing that instead, and always false with the assist off.
+	bool isTractionControlActive;
+
+	/// ABS held the brake torque of at least one wheel below what the brake asked for in the last
+	/// step. Always false with the assist off.
+	bool isAbsActive;
 } b3WheeledVehicleState;
 
 /// Wheel readout, updated each step

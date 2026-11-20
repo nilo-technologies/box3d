@@ -234,7 +234,8 @@ void b3SolveWheeledVehicleWheelJoint( b3JointSim* base, b3StepContext* context, 
 		b3ApplyWheelImpulse( joint, mA, mB, iA, iB, rA, rB, b3MulSV( impulse, normal ), &vA, &wA, &vB, &wB );
 	}
 
-	// Hard bump stop, push only, speculative with no position correction
+	// Hard bump stop, push only, speculative with no position correction. On the stop it holds
+	// the chassis, or with restitution pushes it back out until it leaves at the rebound speed.
 	if ( joint->enableBumpStop )
 	{
 		b3Vec3 vr = b3Sub( b3Add( vA, b3Cross( wA, rA ) ), b3Add( vB, b3Cross( wB, rB ) ) );
@@ -242,6 +243,19 @@ void b3SolveWheeledVehicleWheelJoint( b3JointSim* base, b3StepContext* context, 
 		float C = joint->bumpC + deltaC;
 		float bias = C > 0.0f ? C * context->inv_h : 0.0f;
 		B3_UNUSED( useBias );
+
+		// Restitution: within reach of the stop it pushes the chassis out until it leaves at the rebound
+		// speed. The reach is the distance the capped force needs to give that speed, as the rubber
+		// of a real stop pushes back over its own thickness. Without it the row would let go a few
+		// millimeters up, long before the chassis has the speed.
+		if ( joint->bumpRebound > 0.0f )
+		{
+			float reach = B3_LINEAR_SLOP + 0.5f * joint->bumpRebound * joint->bumpRebound * joint->normalMass / joint->maxBumpForce;
+			if ( C < reach )
+			{
+				bias = -joint->bumpRebound;
+			}
+		}
 
 		float impulse = -joint->normalMass * ( cdot + bias );
 		// A bump stop that is perfectly rigid turns a hard landing or a curb strike into a huge upward
