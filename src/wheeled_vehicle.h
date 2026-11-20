@@ -108,6 +108,9 @@ typedef struct b3WheeledVehicle
 	// Whether traction control and ABS cut a torque in the last step, for the state readout
 	bool tractionControlActive;
 	bool absActive;
+
+	// How far the brake and steer grip is in, 0 to 1
+	float brakeSteerBlend;
 } b3WheeledVehicle;
 
 b3DeclareArray( b3WheeledVehicle );

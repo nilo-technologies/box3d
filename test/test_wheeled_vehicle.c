@@ -755,6 +755,170 @@ static int BrakeTurnTest( void )
 	return 0;
 }
 
+static float TurnRadius( const b3WheeledVehicleDef* def, float steer, float speed, float* maxRoll );
+
+typedef struct BrakeSteerResult
+{
+	// Ground speed lost (m/s), heading change (rad), share of the steps with a front wheel locked
+	float speedLost;
+	float heading;
+	float locked;
+	bool finite;
+} BrakeSteerResult;
+
+// Full brake from 90 km/h for a second and a half at the given steer input
+static BrakeSteerResult BrakeSteer( const b3WheeledVehicleDef* def, float steer )
+{
+	BrakeSteerResult result = { 0 };
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, def );
+	b3BodyId chassisId = b3WheeledVehicle_GetChassisBody( wheeledVehicleId );
+	Step( worldId, 60 );
+
+	int maxGear = 0;
+	bool inOrder;
+	if ( AccelerateTo( worldId, wheeledVehicleId, 90.0f * KMH, 30.0f, &maxGear, &inOrder ) < 0.0f )
+	{
+		b3DestroyWorld( worldId );
+		return result;
+	}
+
+	b3Vec3 forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
+	float yaw0 = atan2f( forward.x, forward.z );
+	b3Vec3 velocity = b3Body_GetLinearVelocity( chassisId );
+	float speed0 = sqrtf( velocity.x * velocity.x + velocity.z * velocity.z );
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f, .steer = steer } );
+	int locked = 0;
+	int steps = 90;
+	for ( int i = 0; i < steps; ++i )
+	{
+		Step( worldId, 1 );
+		for ( int j = 0; j < 2; ++j )
+		{
+			if ( b3WheeledVehicle_GetWheelState( wheeledVehicleId, j ).slipRatio < -0.5f )
+			{
+				locked += 1;
+				break;
+			}
+		}
+	}
+
+	forward = b3RotateVector( b3Body_GetRotation( chassisId ), b3Vec3_axisZ );
+	float turn = atan2f( forward.x, forward.z ) - yaw0;
+	velocity = b3Body_GetLinearVelocity( chassisId );
+	result.heading = fabsf( atan2f( sinf( turn ), cosf( turn ) ) );
+	result.speedLost = speed0 - sqrtf( velocity.x * velocity.x + velocity.z * velocity.z );
+	result.locked = (float)locked / steps;
+	result.finite = WheeledVehicleIsFinite( wheeledVehicleId );
+	b3DestroyWorld( worldId );
+	return result;
+}
+
+// The ABS brake bias trades steering under braking for stopping: with all the side grip kept free
+// the car turns the most and slows the least. With some of it handed to the brake the car slows at
+// least as hard as without ABS, turns less than at bias 0, and the fronts still do not lock.
+static int AbsBrakeBiasTest( void )
+{
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.assists.abs = true;
+	BrakeSteerResult none = BrakeSteer( &def, 1.0f );
+	def.assists.absBrakeBias = 0.2f;
+	BrakeSteerResult some = BrakeSteer( &def, 1.0f );
+	def.assists.absBrakeBias = 1.0f;
+	BrakeSteerResult all = BrakeSteer( &def, 1.0f );
+	def.assists.abs = false;
+	BrakeSteerResult plain = BrakeSteer( &def, 1.0f );
+	printf( "    brake at full lock for 1.5 s, speed lost and turn: bias 0 %.1f m/s %.0f deg, 0.2 %.1f m/s %.0f deg (locked %.0f%%), 1 %.1f m/s "
+			"%.0f deg (locked %.0f%%), no abs %.1f m/s %.0f deg\n",
+			none.speedLost, none.heading * B3_RAD_TO_DEG, some.speedLost, some.heading * B3_RAD_TO_DEG, 100.0f * some.locked, all.speedLost,
+			all.heading * B3_RAD_TO_DEG, 100.0f * all.locked, plain.speedLost, plain.heading * B3_RAD_TO_DEG );
+	ENSURE( none.finite && some.finite && all.finite && plain.finite );
+	ENSURE( some.speedLost > 1.1f * none.speedLost );
+	ENSURE( some.speedLost > 0.95f * plain.speedLost );
+	ENSURE( some.heading < none.heading );
+	ENSURE( some.locked < 0.1f );
+	ENSURE( all.speedLost > 1.1f * none.speedLost );
+	ENSURE( all.locked < 0.1f );
+
+	// In a straight line the bias changes nothing: there is no cornering force to give up
+	def.assists.abs = true;
+	def.assists.absBrakeBias = 0.0f;
+	BrakeSteerResult straight = BrakeSteer( &def, 0.0f );
+	def.assists.absBrakeBias = 1.0f;
+	BrakeSteerResult straightAll = BrakeSteer( &def, 0.0f );
+	ENSURE( fabsf( straightAll.speedLost - straight.speedLost ) < 0.01f * straight.speedLost );
+	return 0;
+}
+
+// The brake and steer grip gives every tire more grip while braking into a corner, and nothing
+// while braking in a straight line or cornering off the brake
+static int BrakeSteerGripTest( void )
+{
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.assists.abs = true;
+	BrakeSteerResult off = BrakeSteer( &def, 1.0f );
+	BrakeSteerResult offStraight = BrakeSteer( &def, 0.0f );
+	def.assists.brakeSteerGrip = 0.2f;
+	BrakeSteerResult on = BrakeSteer( &def, 1.0f );
+	BrakeSteerResult onStraight = BrakeSteer( &def, 0.0f );
+	printf( "    brake at full lock for 1.5 s: %.1f m/s lost and %.0f deg, with 20%% brake and steer grip %.1f m/s and %.0f deg; straight %.2f "
+			"against %.2f m/s\n",
+			off.speedLost, off.heading * B3_RAD_TO_DEG, on.speedLost, on.heading * B3_RAD_TO_DEG, offStraight.speedLost, onStraight.speedLost );
+	ENSURE( off.finite && on.finite );
+	ENSURE( on.speedLost > off.speedLost );
+	ENSURE( on.heading > off.heading );
+	ENSURE( on.locked < 0.1f );
+	ENSURE( fabsf( onStraight.speedLost - offStraight.speedLost ) < 0.01f * offStraight.speedLost );
+
+	// Cornering off the brake is unchanged
+	float roll;
+	def.assists.brakeSteerGrip = 0.0f;
+	float radius = TurnRadius( &def, 0.5f, 15.0f, &roll );
+	def.assists.brakeSteerGrip = 0.2f;
+	float radiusOn = TurnRadius( &def, 0.5f, 15.0f, &roll );
+	ENSURE( fabsf( radiusOn - radius ) < 0.01f * radius );
+	return 0;
+}
+
+// A held brake that doubles as reverse keeps braking until the car has stopped. It used to let go
+// at the switch speed, and with a slow gearbox the car rolled on while reverse was being selected.
+static int DirectionStopTest( void )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.transmission.shiftTime = 0.5f;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 60 );
+
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
+	Step( worldId, 180 );
+	ENSURE( b3WheeledVehicle_GetState( wheeledVehicleId ).speed > 5.0f );
+
+	// Steps spent rolling forward with neither the brake nor a gear to drive against
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .brake = 1.0f } );
+	int coasting = 0;
+	float minSpeed = FLT_MAX;
+	for ( int i = 0; i < 600; ++i )
+	{
+		Step( worldId, 1 );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
+		minSpeed = b3MinFloat( minSpeed, state.speed );
+		if ( state.speed > 0.2f && state.brake == 0.0f )
+		{
+			coasting += 1;
+		}
+	}
+
+	printf( "    held brake with a 0.5 s shift: %d steps rolling forward off the brake, then reversed to %.1f m/s\n", coasting, minSpeed );
+	ENSURE( coasting <= 1 );
+	ENSURE( minSpeed < -2.0f );
+	ENSURE( WheeledVehicleIsFinite( wheeledVehicleId ) );
+	b3DestroyWorld( worldId );
+	return 0;
+}
+
 static float TurnRadius( const b3WheeledVehicleDef* def, float steer, float speed, float* maxRoll )
 {
 	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
@@ -2432,12 +2596,15 @@ int WheeledVehicleTest( void )
 	RUN_SUBTEST( BrakingTest );
 	RUN_SUBTEST( BrakeTurnTest );
 	RUN_SUBTEST( BrakeReverseTest );
+	RUN_SUBTEST( DirectionStopTest );
 	RUN_SUBTEST( TurningTest );
 	RUN_SUBTEST( AntiRollTest );
 	RUN_SUBTEST( CounterSteerLockTest );
 	RUN_SUBTEST( TireCurveRoundingTest );
 	RUN_SUBTEST( RevMatchTest );
 	RUN_SUBTEST( AssistStateTest );
+	RUN_SUBTEST( AbsBrakeBiasTest );
+	RUN_SUBTEST( BrakeSteerGripTest );
 	RUN_SUBTEST( LoadSensitivityTest );
 	RUN_SUBTEST( SlopeHoldTest );
 	RUN_SUBTEST( DynamicGroundTest );

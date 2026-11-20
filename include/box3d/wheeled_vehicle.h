@@ -433,6 +433,24 @@ typedef struct b3WheeledVehicleAssists
 	/// releases a wheel that slips past its peak, and caps engine braking on driven wheels too.
 	bool abs;
 
+	/// How much of the side grip ABS keeps free for steering goes to the brake instead, from 0 to 1,
+	/// on the wheels ahead of the center of mass. The wheels behind it always keep their side grip:
+	/// giving it up there swings the tail out under braking in a turn.
+	/// At 0 the cornering force keeps all its slip angle asks for and the brake gets what is left
+	/// (never under 30% of the peak): the car steers best under braking and slows the least. At 1
+	/// the brake is capped as in a straight line and the tire shares its grip as it does without
+	/// ABS, still without locking. The useful range is 0 to about 0.3: past it the tire's own
+	/// friction ellipse sets the split and more bias changes little. Around 0.2 a car held at its
+	/// front tires' peak slip angle slows as hard as without ABS and still turns more.
+	float absBrakeBias;
+
+	/// Extra grip on every tire while braking with the steered wheels cornering, as a fraction of
+	/// the grip, from 0 to 1 (0.1 is 10% more). An arcade aid for braking into a corner: it follows
+	/// the brake times how close the steered wheels are to their peak slip angle, and takes 0.2 s
+	/// to come in and to fade out. Braking in a straight line and cornering off the brake get
+	/// nothing. 0 is off.
+	float brakeSteerGrip;
+
 	/// Downforce coefficient, force = downforce * speed^2 (N*s^2/m^2)
 	float downforce;
 

@@ -55,6 +55,13 @@
 // Bump stop restitution acts when the chassis meets the stop faster than this (m/s), as contact
 // restitution has its threshold: a wheel that taps its stop over a bump does not bounce the car
 #define B3_BUMP_STOP_BOUNCE_SPEED 1.0f
+
+// Changing direction with the automatic gearbox, the brake stays on down to this speed (m/s) while
+// the shift is still in progress
+#define B3_DIRECTION_STOP_SPEED 0.1f
+
+// Time the brake and steer grip takes to come in and to fade out (s)
+#define B3_BRAKE_STEER_GRIP_TIME 0.2f
 #define B3_RADIANS_TO_RPM ( 60.0f / ( 2.0f * B3_PI ) )
 #define B3_VEHICLE_RING_COUNT 12
 
@@ -198,6 +205,8 @@ b3WheeledVehicleDef b3DefaultWheeledVehicleDef( void )
 	def.assists.driftGripScale = 1.0f;
 	def.assists.tractionControl = true;
 	def.assists.abs = false;
+	def.assists.absBrakeBias = 0.0f;
+	def.assists.brakeSteerGrip = 0.0f;
 	def.assists.downforce = 1.5f;
 	def.assists.drag = 0.6f;
 	def.assists.rollInfluence = 0.25f;
@@ -402,6 +411,8 @@ static b3WheeledVehicleAssists b3SanitizeAssists( b3WheeledVehicleAssists a )
 	a.maxTiltAngle = b3SanitizeFloat( a.maxTiltAngle, 0.0f, B3_PI, 0.0f );
 	a.stickySpeed = b3SanitizeFloat( a.stickySpeed, 0.0f, FLT_MAX, 0.0f );
 	a.stickyTime = b3SanitizeFloat( a.stickyTime, 0.0f, FLT_MAX, 0.0f );
+	a.absBrakeBias = b3SanitizeFloat( a.absBrakeBias, 0.0f, 1.0f, 0.0f );
+	a.brakeSteerGrip = b3SanitizeFloat( a.brakeSteerGrip, 0.0f, 1.0f, 0.0f );
 	return a;
 }
 
@@ -851,6 +862,7 @@ void b3WheeledVehicle_Reset( b3WheeledVehicleId wheeledVehicleId, b3Pos position
 	v->launchSpent = false;
 	v->tractionControlActive = false;
 	v->absActive = false;
+	v->brakeSteerBlend = 0.0f;
 }
 
 void b3WheeledVehicle_SetChassis( b3WheeledVehicleId wheeledVehicleId, b3WheeledVehicleChassis chassis )
@@ -1547,7 +1559,17 @@ static void b3UpdateGearbox( b3WheeledVehicle* v, float dt, float shiftRpm, bool
 				{
 					b3ShiftTo( v, 1 );
 				}
-				throttle = forward;
+
+				// Still rolling backward while the gearbox selects first: the clutch is open, so the
+				// throttle would do nothing and the car would coast. The brake finishes the stop.
+				if ( v->shiftTimer > 0.0f && v->speed < -B3_DIRECTION_STOP_SPEED )
+				{
+					brake = b3MaxFloat( brake, forward );
+				}
+				else
+				{
+					throttle = forward;
+				}
 			}
 		}
 		else if ( forward < 0.0f )
@@ -1562,7 +1584,17 @@ static void b3UpdateGearbox( b3WheeledVehicle* v, float dt, float shiftRpm, bool
 				{
 					b3ShiftTo( v, -1 );
 				}
-				throttle = -forward;
+
+				// The same the other way: a held brake that doubles as reverse let go at the switch
+				// speed, and the car rolled on at walking pace for as long as the shift took
+				if ( v->shiftTimer > 0.0f && v->speed > B3_DIRECTION_STOP_SPEED )
+				{
+					brake = b3MaxFloat( brake, -forward );
+				}
+				else
+				{
+					throttle = -forward;
+				}
 			}
 		}
 
@@ -2014,6 +2046,34 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 	// Set below wherever an assist cuts a torque this step
 	v->absActive = false;
 	v->tractionControlActive = false;
+
+	// Brake and steer grip: extra grip on every tire while the car brakes with its steered wheels
+	// cornering. It follows the brake times how much of their peak slip angle the steered wheels
+	// are at (from the last step), and comes in and fades out over a fixed time, so letting go of
+	// the brake mid corner does not drop the grip in one step.
+	float gripBoost = 1.0f;
+	if ( v->assists.brakeSteerGrip > 0.0f )
+	{
+		float use = 0.0f;
+		for ( int i = 0; i < wheelCount; ++i )
+		{
+			const b3WheeledVehicleWheel* wheel = v->wheels + i;
+			float peakAngle = wheel->def.tire.lateralPeakAngle;
+			if ( wheel->def.steerFactor != 0.0f && wheel->hasContact && peakAngle > 0.0f )
+			{
+				use = b3MaxFloat( use, b3MinFloat( b3AbsFloat( wheel->slipAngle ) / peakAngle, 1.0f ) );
+			}
+		}
+
+		float step = dt / B3_BRAKE_STEER_GRIP_TIME;
+		v->brakeSteerBlend += b3ClampFloat( brake * use - v->brakeSteerBlend, -step, step );
+		gripBoost = 1.0f + v->assists.brakeSteerGrip * v->brakeSteerBlend;
+	}
+	else
+	{
+		v->brakeSteerBlend = 0.0f;
+	}
+
 	b3Vec3 localCenter = b3Body_GetLocalCenter( v->chassisId );
 	float gravity = b3GravityLength( world );
 	for ( int i = 0; i < wheelCount; ++i )
@@ -2084,6 +2144,7 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 		// lateral force, the longitudinal peak and the ABS and traction control caps all agree. The
 		// reference is the static load on level ground, so the coefficients hold for a car at rest.
 		float ground = frame->groundScale * b3TireLoadScale( tire, load, wheel->sprungMass * gravity );
+		ground *= gripBoost;
 		float muY = ground * b3TireCurve( b3AbsFloat( wheel->slipAngle ), tire->lateralPeakAngle, tire->lateralPeakFriction,
 										  tire->lateralSlideAngle, tire->lateralSlideFriction, tire->curveRounding );
 
@@ -2144,7 +2205,13 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 								   ? b3TireRise( b3MinFloat( b3AbsFloat( wheel->slipAngle ) / tire->lateralPeakAngle, 1.0f ),
 												 tire->curveRounding )
 								   : 0.0f;
-			float room = b3MaxFloat( sqrtf( 1.0f - lateralUse * lateralUse ), 0.3f );
+			// The brake bias hands part of that side grip to the brake instead: at 0 the cornering
+			// force keeps all it asks for, at 1 the brake is capped as in a straight line. Only on
+			// wheels ahead of the center of mass: a front tire that gives up side grip to brake
+			// runs the car wide, while a rear tire that does swings the tail out.
+			bool ahead = b3Dot( b3Sub( def->position, localCenter ), v->chassis.forward ) > 0.0f;
+			float reserved = ( 1.0f - ( ahead ? v->assists.absBrakeBias : 0.0f ) ) * lateralUse;
+			float room = b3MaxFloat( sqrtf( 1.0f - reserved * reserved ), 0.3f );
 			float limit = room * ground * tire->longitudinalPeakFriction * load * def->radius;
 
 			// A wheel past its peak slip needs only the sliding torque to stay locked, which is less
