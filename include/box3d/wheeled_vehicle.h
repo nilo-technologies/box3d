@@ -403,11 +403,13 @@ typedef struct b3WheeledVehicleSteering
 	float ackermann;
 
 	/// Extra lock while the input steers into a rear slide, as a fraction of the slide angle past the
-	/// rear tires' peak slip angle, from 0 to 1. The speed falloff leaves a few degrees of lock at
-	/// speed, less than the angle the car is sliding at, so opposite lock cannot point the wheels
-	/// where the car is going. At 1, full opposite lock adds the whole of that excess to the speed's
-	/// own lock. It scales with the input and never exceeds maxAngle. Steering away from the slide,
-	/// and a rear that is still within its grip, are unchanged. 0 is off.
+	/// rear tires' peak slip angle, from 0 to 1. It is for a car with a speed falloff (speedReference
+	/// above 0): the falloff leaves a few degrees of lock at speed, less than the angle the car is
+	/// sliding at, so opposite lock cannot point the wheels where the car is going. At 1, full
+	/// opposite lock adds the whole of that excess to the lock the speed leaves. It scales with the
+	/// input and never exceeds maxAngle, so with speedReference 0, where full input already gives
+	/// maxAngle, it adds nothing at full input. Steering away from the slide, and a rear that is
+	/// still within its grip, are unchanged. 0 is off.
 	float counterSteerLock;
 } b3WheeledVehicleSteering;
 
