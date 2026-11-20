@@ -390,6 +390,72 @@ static float PowerOversteer( bool tractionControl )
 	return maxSideslip;
 }
 
+typedef struct TractionUse
+{
+	// Mean share of their peak drive force the driven tires carry
+	float share;
+
+	// Largest driven wheel slip ratio, either way
+	float maxSlip;
+
+	// Seconds from rest to 60 km/h
+	float time60;
+
+	int samples;
+	bool finite;
+} TractionUse;
+
+// Full throttle from rest in first gear with traction control alone (launch control off).
+// Measures the driven tires between 20 and 40 km/h, where the engine can overpower them and
+// traction control sets the drive.
+static TractionUse MeasureTractionUse( void )
+{
+	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
+	CreateFlatGround( worldId );
+	b3WheeledVehicleDef def = b3DefaultWheeledVehicleDef();
+	def.assists.tractionControl = true;
+	def.assists.launchControl = false;
+	b3WheeledVehicleId wheeledVehicleId = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, &def );
+	Step( worldId, 120 );
+
+	TractionUse result = { 0.0f, 0.0f, -1.0f, 0, false };
+	b3WheeledVehicle_SetInput( wheeledVehicleId, (b3WheeledVehicleInput){ .forward = 1.0f } );
+	for ( int i = 0; i < 480; ++i )
+	{
+		Step( worldId, 1 );
+		b3WheeledVehicleState state = b3WheeledVehicle_GetState( wheeledVehicleId );
+		if ( result.time60 < 0.0f && state.speed >= 60.0f * KMH )
+		{
+			result.time60 = ( i + 1 ) * VEHICLE_DT;
+		}
+
+		if ( state.gear != 1 || state.speed < 20.0f * KMH || state.speed > 40.0f * KMH )
+		{
+			continue;
+		}
+
+		for ( int j = 2; j < 4; ++j )
+		{
+			b3WheeledVehicleWheelState ws = b3WheeledVehicle_GetWheelState( wheeledVehicleId, j );
+			float peak = def.wheels[j].tire.longitudinalPeakFriction * ws.load;
+			if ( ws.hasContact && peak > 0.0f )
+			{
+				result.share += ws.longitudinalForce / peak;
+				result.samples += 1;
+			}
+			result.maxSlip = b3MaxFloat( result.maxSlip, fabsf( ws.slipRatio ) );
+		}
+	}
+
+	if ( result.samples > 0 )
+	{
+		result.share /= (float)result.samples;
+	}
+	result.finite = WheeledVehicleIsFinite( wheeledVehicleId );
+	b3DestroyWorld( worldId );
+	return result;
+}
+
 static int TractionControlTest( void )
 {
 	float with = LaunchSlip( true, 1.0f );
@@ -413,6 +479,20 @@ static int TractionControlTest( void )
 			cornerWithout );
 	ENSURE( cornerWith >= 0.0f && cornerWith < 15.0f );
 	ENSURE( cornerWithout > 30.0f );
+
+	// The engine makes up its own friction and spin-up, so they do not come out of the tires'
+	// share: in first gear the driven tires carry about 92% of their peak (76% when the cap was on
+	// the engine torque alone) and still do not slip, and the car reaches 60 km/h in about 3.0 s
+	// (3.7 s before)
+	TractionUse use = MeasureTractionUse();
+	float peakSlip = b3DefaultWheeledVehicleDef().wheels[2].tire.longitudinalPeakSlip;
+	printf( "    first gear, 20-40 km/h: the driven tires carry %.0f%% of their peak, slip ratio at most "
+			"%.3f (peak %.2f), 0-60 km/h %.2f s\n",
+			100.0f * use.share, use.maxSlip, peakSlip, use.time60 );
+	ENSURE( use.finite && use.samples > 20 );
+	ENSURE( use.share > 0.85f && use.share <= 1.0f );
+	ENSURE( use.maxSlip < peakSlip );
+	ENSURE( use.time60 > 0.0f && use.time60 < 3.3f );
 	return 0;
 }
 

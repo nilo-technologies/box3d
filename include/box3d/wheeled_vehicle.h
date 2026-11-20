@@ -392,7 +392,8 @@ typedef struct b3WheeledVehicleAssists
 	float driftGripScale;
 
 	/// Limits the throttle so no grounded driven wheel gets more torque than its tire can transmit
-	/// at peak grip. On wheels behind the center of mass it also leaves room for the cornering
+	/// at peak grip. The engine makes up what its own friction and spin-up take, until the wheels
+	/// get 90% of that. On wheels behind the center of mass it also leaves room for the cornering
 	/// force, so full throttle mid corner does not spin the car.
 	bool tractionControl;
 

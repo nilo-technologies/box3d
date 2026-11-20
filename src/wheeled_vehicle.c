@@ -32,6 +32,12 @@
 #define B3_LAUNCH_ENGINE_SCALE 2.0f
 #define B3_LAUNCH_DONE_TIME 0.3f
 
+// With traction control the engine makes up its own friction and spin-up until the clutch passes
+// this share of the driven tires' peak torque. The margin covers the load moving off a tire
+// faster than last step's load shows: at 0.95 a car driving onto a light slab pushed it away, and
+// at 1 the tires slip.
+#define B3_TRACTION_TARGET 0.9f
+
 // Pulling away, the clutch slips below a floor that starts at the launch rpm and rises with the
 // road speed until it meets the wheels at this ratio of the launch rpm, where the clutch locks
 #define B3_CLUTCH_LOCK_RATIO 1.3f
@@ -2138,8 +2144,8 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 	}
 
 	// Launch control: a slip controller on the driven wheels from a standstill. Traction control
-	// caps the drive torque at the tires' peak torque, but part of that torque spins up the engine
-	// and part is lost to friction, so the tires run well below their peak; without traction
+	// caps the drive torque at the tires' peak torque as last step's load gives it, so from rest,
+	// as the weight moves back, the tires run below their peak; without traction
 	// control nothing stops them spinning up. Launch control sets each driven wheel's cap from its
 	// slip every step instead: above the peak torque while the tire slips less than its target,
 	// below it while it slips more, so the tire settles just under its peak slip. Like traction
@@ -2244,6 +2250,7 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 
 		// Traction control, and launch control while launching, lower the torque until no grounded
 		// driven wheel gets more than its tire can transmit
+		float clutchCap = FLT_MAX;
 		if ( limitTraction && throttle > 0.0f && clutch > 0.0f )
 		{
 			float limit = FLT_MAX;
@@ -2256,10 +2263,34 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 				}
 			}
 
+			// The clutch passes no more than the wheels can take, also with the engine on its limiter,
+			// where the torque curve is zero and the engine's momentum is all there is to pass
+			if ( launching == false )
+			{
+				clutchCap = limit;
+			}
+
 			float curve = b3EngineTorqueAt( e, rpm );
 			if ( curve > 0.0f && limit < FLT_MAX )
 			{
-				torqueScale = b3MinFloat( torqueScale, limit / curve );
+				// The engine may make the cap itself, as launch control expects
+				float engineCap = limit;
+				if ( launching == false && k > 0.0f )
+				{
+					// The engine's friction and the torque that spins it up come out before the clutch,
+					// so with the cap on the engine torque alone the tires ran well under their grip,
+					// most of all in first gear, where both are largest against the cap. Traction
+					// control aims at what the clutch passes instead: the solve below is linear in the
+					// engine torque, so this is the engine torque at which the clutch passes its
+					// target share of the cap. Where the engine loses less than the margin, the cap
+					// itself is the larger of the two and nothing changes.
+					float lump = e->inertia + h * e->angularDamping;
+					float det = ( lump + h * k ) * ( 1.0f + h * k * A ) - h * k * h * k * A;
+					float target = B3_TRACTION_TARGET * limit;
+					float needed = ( target * det / k + b * lump - e->inertia * v->engineSpeed ) / h;
+					engineCap = b3MaxFloat( engineCap, needed + parasiticTorque );
+				}
+				torqueScale = b3MinFloat( torqueScale, engineCap / curve );
 			}
 		}
 
@@ -2331,6 +2362,16 @@ static void b3UpdateWheeledVehicle( b3World* world, b3WheeledVehicle* v, float d
 			wheelSpeed = ( b + h * k * A * floorSpeed ) / ( 1.0f + h * k * A );
 			clutchTorque = k * ( floorSpeed - wheelSpeed );
 			clutchTorque = b3MinFloat( clutchTorque, available );
+		}
+
+		// The clutch slips at the traction control cap: below the floor it would pass all the engine
+		// makes there, and an engine still above the wheels after a shift would pass its own momentum
+		if ( clutchTorque > clutchCap )
+		{
+			clutchTorque = clutchCap;
+			engineSpeed = ( e->inertia * v->engineSpeed + h * ( engineTorque - clutchTorque ) ) /
+						  ( e->inertia + h * e->angularDamping );
+			engineSpeed = b3MaxFloat( engineSpeed, floorSpeed );
 		}
 
 		// ABS caps engine braking at the room the service brake left each grounded driven wheel.
