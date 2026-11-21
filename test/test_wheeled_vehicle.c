@@ -1768,33 +1768,50 @@ static int DestroyTest( void )
 {
 	b3WorldId worldId = CreateWheeledVehicleWorld( 1 );
 	CreateFlatGround( worldId );
+	int groundBodyCount = b3World_GetCounters( worldId ).bodyCount;
 	b3WheeledVehicleId a = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
 	b3WheeledVehicleId b = CreateCar( worldId, (b3Pos){ 5.0f, 0.6f, 0.0f }, NULL );
 	Step( worldId, 10 );
 	ENSURE( b3World_GetWheeledVehicleCount( worldId ) == 2 );
+
+	// Two chassis bodies and the anchor the wheel joints hold to
+	ENSURE( b3World_GetCounters( worldId ).bodyCount == groundBodyCount + 3 );
 
 	b3BodyId chassisA = b3WheeledVehicle_GetChassisBody( a );
 	b3DestroyBody( chassisA );
 	ENSURE( b3WheeledVehicle_IsValid( a ) == false );
 	ENSURE( b3WheeledVehicle_IsValid( b ) );
 	ENSURE( b3World_GetWheeledVehicleCount( worldId ) == 1 );
+	ENSURE( b3World_GetCounters( worldId ).bodyCount == groundBodyCount + 2 );
 	Step( worldId, 10 );
 
+	// The anchor goes with the last vehicle
 	b3BodyId chassisB = b3WheeledVehicle_GetChassisBody( b );
 	ENSURE( b3Body_GetJointCount( chassisB ) == 4 );
 	b3DestroyWheeledVehicle( b );
 	ENSURE( b3WheeledVehicle_IsValid( b ) == false );
 	ENSURE( b3Body_GetJointCount( chassisB ) == 0 );
 	ENSURE( b3World_GetWheeledVehicleCount( worldId ) == 0 );
+	ENSURE( b3World_GetCounters( worldId ).bodyCount == groundBodyCount + 1 );
 	Step( worldId, 10 );
 
-	// Slots are reused with a new generation
+	// Slots are reused with a new generation, and the next vehicle makes a new anchor
 	b3WheeledVehicleId c = CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 5.0f }, NULL );
 	ENSURE( b3WheeledVehicle_IsValid( c ) );
 	ENSURE( b3WheeledVehicle_IsValid( a ) == false );
+	ENSURE( b3World_GetCounters( worldId ).bodyCount == groundBodyCount + 3 );
 	Step( worldId, 10 );
 
+	// Also when the last vehicle goes with its chassis
+	b3DestroyBody( b3WheeledVehicle_GetChassisBody( c ) );
+	ENSURE( b3WheeledVehicle_IsValid( c ) == false );
+	ENSURE( b3World_GetCounters( worldId ).bodyCount == groundBodyCount + 1 );
+	b3DestroyBody( chassisB );
+	ENSURE( b3World_GetCounters( worldId ).bodyCount == groundBodyCount );
+
 	// Destroying the world with live vehicles must not leak
+	CreateCar( worldId, (b3Pos){ 0.0f, 0.6f, 0.0f }, NULL );
+	Step( worldId, 10 );
 	b3DestroyWorld( worldId );
 	return 0;
 }

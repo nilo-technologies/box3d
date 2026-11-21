@@ -461,6 +461,9 @@ void b3DestroyBody( b3BodyId bodyId )
 	b3ValidateSolverSets( world );
 
 	world->locked = false;
+
+	// The world's last vehicle may have gone with this body, and its anchor goes after it
+	b3DestroyUnusedWheeledVehicleAnchor( world );
 }
 
 int b3Body_GetContactCapacity( b3BodyId bodyId )

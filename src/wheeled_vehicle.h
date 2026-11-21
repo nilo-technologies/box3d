@@ -117,3 +117,4 @@ b3DeclareArray( b3WheeledVehicle );
 
 void b3UpdateWheeledVehiclesPreStep( b3World* world, float timeStep );
 void b3DestroyWheeledVehiclesOnBody( b3World* world, b3BodyId bodyId );
+void b3DestroyUnusedWheeledVehicleAnchor( b3World* world );

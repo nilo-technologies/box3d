@@ -161,7 +161,7 @@ typedef struct b3World
 	b3Array( b3Joint ) joints;
 
 	// WheeledVehicles are stored densely by id. The anchor is a static body that wheel joints attach to
-	// while touching static ground or nothing.
+	// while touching static ground or nothing. The first vehicle makes it and the last one destroys it.
 	b3IdPool wheeledVehicleIdPool;
 	b3Array( b3WheeledVehicle ) vehicles;
 	b3BodyId wheeledVehicleAnchorId;
