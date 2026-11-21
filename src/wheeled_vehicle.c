@@ -692,6 +692,26 @@ void b3DestroyWheeledVehicle( b3WheeledVehicleId wheeledVehicleId )
 
 	b3WheeledVehicle* v = b3GetWheeledVehicleFullId( world, wheeledVehicleId );
 	b3DestroyWheeledVehicleInternal( world, v );
+	b3DestroyUnusedWheeledVehicleAnchor( world );
+}
+
+// The anchor lives only while the world has a vehicle. Once the last one is gone, by
+// b3DestroyWheeledVehicle or with its chassis in b3DestroyBody, the anchor is destroyed and
+// forgotten, so the world keeps no body of its own and the next vehicle makes a new anchor.
+// A world never records while it has vehicles, so destroying the anchor records nothing.
+void b3DestroyUnusedWheeledVehicleAnchor( b3World* world )
+{
+	if ( B3_IS_NULL( world->wheeledVehicleAnchorId ) || b3GetIdCount( &world->wheeledVehicleIdPool ) > 0 )
+	{
+		return;
+	}
+
+	b3BodyId anchorId = world->wheeledVehicleAnchorId;
+	world->wheeledVehicleAnchorId = b3_nullBodyId;
+	if ( b3IsBodyIdValidInternal( world, anchorId ) )
+	{
+		b3DestroyBody( anchorId );
+	}
 }
 
 void b3DestroyWheeledVehiclesOnBody( b3World* world, b3BodyId bodyId )
